@@ -3,3 +3,4 @@
 /sdk/dist
 /sdk/pkg
 *.wasm
+captcha.toml

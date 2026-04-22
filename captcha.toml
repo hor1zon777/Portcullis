@@ -29,4 +29,4 @@ allowed_ips = ["127.0.0.1"]
 
 [admin]
 enabled = true
-token = "admin_test_token_change_me"
+token = "891c81bf343529cc7c3b9ceab5b2c541eaa2679fb9f95221c7865c6341514826"
