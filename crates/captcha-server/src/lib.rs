@@ -32,21 +32,9 @@ pub fn build_router(
     prom_handle: Option<PrometheusHandle>,
 ) -> Router {
     let config = app_state.config.load();
-    let allowed_origins: Vec<HeaderValue> = config
-        .sites
-        .values()
-        .flat_map(|s| &s.origins)
-        .filter_map(|o| o.parse::<HeaderValue>().ok())
-        .collect();
-
-    let cors = if allowed_origins.is_empty() {
-        CorsLayer::permissive()
-    } else {
-        CorsLayer::new()
-            .allow_origin(allowed_origins)
-            .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any)
-    };
+    // CORS 始终 permissive（预检放通所有源）。
+    // Origin 白名单校验在 handler 层（challenge.rs / verify.rs）按 site 粒度做。
+    let cors = CorsLayer::permissive();
 
     let mut router = Router::new()
         .route("/api/v1/challenge", post(routes::challenge::create))
