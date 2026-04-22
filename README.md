@@ -254,14 +254,16 @@ cd sdk && pnpm type-check           # SDK 类型检查
 
 | 文档 | 说明 |
 |------|------|
+| [AI 接入提示词](docs/AI_INTEGRATION_PROMPT.md) | 给 AI 编程助手的接入指南（推荐首读） |
 | [协议规范](docs/PROTOCOL.md) | 双阶段算法、签名格式、端点详情 |
 | [接入指南](docs/INTEGRATION.md) | 部署、配置、前后端接入三种方式 |
+| [部署教程](docs/DEPLOY.md) | 从零部署完整步骤 |
 | [安全加固](docs/SECURITY.md) | 12 项威胁对策 + 配置检查清单 |
 | [后端代码片段](docs/snippets/README.md) | Node/Python/Go/PHP/Java/C#/Ruby |
-| [OpenAPI 规范](docs/openapi.yaml) | 全部 7 个端点的机器可读定义 |
+| [OpenAPI 规范](docs/openapi.yaml) | 全部端点的机器可读定义 |
 | [升级指南](docs/UPGRADING.md) | 算法参数变更的蓝绿发布步骤 |
 | [API 稳定性](docs/API_STABILITY.md) | v1.x 兼容性承诺 |
-| [变更日志](CHANGELOG.md) | v0.1.0 → v1.0.0 全部变更 |
+| [变更日志](CHANGELOG.md) | 全部版本变更历史 |
 
 ## License
 
