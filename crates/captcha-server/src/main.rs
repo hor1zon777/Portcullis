@@ -44,6 +44,9 @@ async fn main() {
     let config_path = cfg.config_path.clone();
 
     // 初始化 SQLite
+    if let Some(parent) = cfg.db_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
     let db = captcha_server::db::open(&cfg.db_path);
     captcha_server::db::migrate(&db);
 

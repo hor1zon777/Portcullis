@@ -169,7 +169,7 @@ impl Config {
 
         let db_path = std::env::var("CAPTCHA_DB_PATH")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("captcha.db"));
+            .unwrap_or_else(|_| PathBuf::from("data/captcha.db"));
 
         Self {
             secret: secret.into_bytes(),
