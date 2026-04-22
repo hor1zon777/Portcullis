@@ -63,20 +63,25 @@ pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
 #[derive(Deserialize)]
 pub struct CreateSiteRequest {
     pub key: String,
-    pub secret_key: String,
     pub diff: u8,
     #[serde(default)]
     pub origins: Vec<String>,
+}
+
+fn gen_secret_key() -> String {
+    let mut buf = [0u8; 32];
+    getrandom::getrandom(&mut buf).expect("随机数生成失败");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub async fn create_site(
     State(state): State<AppState>,
     Json(req): Json<CreateSiteRequest>,
 ) -> Response {
-    if req.key.is_empty() || req.secret_key.len() < 16 {
+    if req.key.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "key 不能为空，secret_key >= 16 字节"})),
+            Json(serde_json::json!({"error": "key 不能为空"})),
         )
             .into_response();
     }
@@ -89,16 +94,22 @@ pub async fn create_site(
         )
             .into_response();
     }
+
+    let secret_key = gen_secret_key();
     config.sites.insert(
         req.key.clone(),
         crate::config::SiteConfig {
-            secret_key: req.secret_key,
+            secret_key: secret_key.clone(),
             diff: req.diff,
             origins: req.origins,
         },
     );
     state.reload_config(config).await;
-    (StatusCode::CREATED, Json(serde_json::json!({"ok": true}))).into_response()
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({"ok": true, "secret_key": secret_key})),
+    )
+        .into_response()
 }
 
 // ──────── DELETE /admin/api/sites/:key ────────

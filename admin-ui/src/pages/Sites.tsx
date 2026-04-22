@@ -16,11 +16,18 @@ export default function Sites() {
   const [editOrigins, setEditOrigins] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [form, setForm] = useState({ key: '', secret_key: '', diff: 18, origins: '' });
+  const [form, setForm] = useState({ key: '', diff: 18, origins: '' });
+  const [generatedSecret, setGeneratedSecret] = useState<string | null>(null);
 
   const createMut = useMutation({
-    mutationFn: () => api.createSite({ ...form, origins: form.origins.split(',').map(s => s.trim()).filter(Boolean) }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['sites'] }); setShowForm(false); setForm({ key: '', secret_key: '', diff: 18, origins: '' }); toast.success('站点创建成功'); },
+    mutationFn: () => api.createSite({ key: form.key, diff: form.diff, origins: form.origins.split(',').map(s => s.trim()).filter(Boolean) }),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['sites'] });
+      setShowForm(false);
+      setForm({ key: '', diff: 18, origins: '' });
+      setGeneratedSecret(data.secret_key);
+      toast.success('站点创建成功，请复制 Secret Key（仅显示一次）', { duration: 10000 });
+    },
     onError: (e) => toast.error('创建失败: ' + (e as Error).message),
   });
   const updateMut = useMutation({
@@ -36,7 +43,7 @@ export default function Sites() {
 
   function startEdit(s: SiteView) { setEditKey(s.key); setEditDiff(s.diff); setEditOrigins(s.origins.join(', ')); }
   function handleCopy(key: string) { copyToClipboard(key); setCopiedKey(key); setTimeout(() => setCopiedKey(null), 2000); toast.success('已复制 ' + key); }
-  const formValid = isValidSiteKey(form.key) && form.secret_key.length >= 16 && form.diff >= 8 && form.diff <= 28;
+  const formValid = isValidSiteKey(form.key) && form.diff >= 8 && form.diff <= 28;
 
   if (isLoading) return <PageLoader />;
 
@@ -48,18 +55,15 @@ export default function Sites() {
       </div>
       {showForm && (
         <form className="card dark:bg-gray-900 mb-4" onSubmit={e => { e.preventDefault(); if (formValid) createMut.mutate(); }}>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <input className="input" placeholder="Site Key (字母数字下划线 3-64)" value={form.key} onChange={e => setForm({ ...form, key: e.target.value })} />
               {form.key && !isValidSiteKey(form.key) && <p className="text-xs text-destructive mt-1">格式：3-64 位字母数字下划线</p>}
             </div>
-            <div>
-              <input className="input" placeholder="Secret Key (>= 16 字符)" type="password" value={form.secret_key} onChange={e => setForm({ ...form, secret_key: e.target.value })} />
-              {form.secret_key && form.secret_key.length < 16 && <p className="text-xs text-destructive mt-1">至少 16 字符</p>}
-            </div>
-            <input className="input" type="number" min={8} max={28} value={form.diff} onChange={e => setForm({ ...form, diff: Number(e.target.value) || 18 })} />
+            <input className="input" type="number" min={8} max={28} value={form.diff} onChange={e => setForm({ ...form, diff: Number(e.target.value) || 18 })} placeholder="Diff" />
             <input className="input" placeholder="Origins (逗号分隔，留空放通全部)" value={form.origins} onChange={e => setForm({ ...form, origins: e.target.value })} />
           </div>
+          <p className="text-xs text-muted-foreground mt-2">Secret Key 将在创建后自动生成并显示一次。</p>
           <div className="mt-3 flex gap-2">
             <button type="submit" className="btn btn-primary" disabled={!formValid || createMut.isPending}>{createMut.isPending ? '创建中...' : '确认创建'}</button>
             <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>取消</button>
@@ -86,6 +90,23 @@ export default function Sites() {
         </div>
       </div>
       <ConfirmDialog open={!!deleteTarget} title={`删除站点 ${deleteTarget}`} description="删除后该站点的前端 widget 将无法获取挑战。" confirmLabel="确认删除" danger onConfirm={async () => { if (deleteTarget) await deleteMut.mutateAsync(deleteTarget); }} onCancel={() => setDeleteTarget(null)} />
+
+      {/* 密钥展示对话框 */}
+      {generatedSecret && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setGeneratedSecret(null)}>
+          <div className="card dark:bg-gray-900 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-lg mb-2">Secret Key 已生成</h3>
+            <p className="text-sm text-muted-foreground mb-3">请立即复制保存，此密钥仅显示一次，关闭后无法再查看。</p>
+            <div className="flex items-center gap-2 p-3 bg-muted dark:bg-gray-800 rounded-md">
+              <code className="flex-1 text-sm font-mono break-all select-all">{generatedSecret}</code>
+              <button className="btn btn-primary btn-sm flex-shrink-0" onClick={() => { copyToClipboard(generatedSecret); toast.success('已复制 Secret Key'); }}>
+                <Copy size={12} /> 复制
+              </button>
+            </div>
+            <button className="btn btn-secondary w-full mt-4" onClick={() => setGeneratedSecret(null)}>我已保存，关闭</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
