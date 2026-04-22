@@ -1,6 +1,11 @@
+# 本地构建版本（开发用）
+# 使用：docker compose -f docker-compose.build.yml up --build
+
 services:
   captcha-server:
-    image: ghcr.io/hor1zon777/portcullis/server:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     env_file: .env
     environment:
       - CAPTCHA_DB_PATH=/data/captcha.db
@@ -17,13 +22,17 @@ services:
       start_period: 5s
 
   admin-ui:
-    image: ghcr.io/hor1zon777/portcullis/admin-ui:latest
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
     expose:
       - "80"
     restart: unless-stopped
 
   nginx:
-    image: ghcr.io/hor1zon777/portcullis/nginx:latest
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
     ports:
       - "80:80"
     depends_on:
