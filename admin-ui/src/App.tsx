@@ -1,8 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Globe, ScrollText, Shield, LogOut } from 'lucide-react';
-import { getToken, clearToken } from './lib/api';
+import {
+  LayoutDashboard, Globe, ScrollText, Shield, LogOut, Menu, X, Moon, Sun,
+} from 'lucide-react';
+import { getToken, clearToken, onAuthChange } from './lib/api';
 import { cn } from './lib/utils';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Sites from './pages/Sites';
@@ -18,46 +21,68 @@ const NAV = [
 
 function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
+  const [sideOpen, setSideOpen] = useState(false);
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+
+  const toggleDark = useCallback(() => {
+    const next = !dark;
+    setDark(next);
+    document.documentElement.classList.toggle('dark', next);
+    localStorage.setItem('theme', next ? 'dark' : 'light');
+  }, [dark]);
+
+  useEffect(() => {
+    if (localStorage.getItem('theme') === 'dark') {
+      setDark(true);
+      document.documentElement.classList.add('dark');
+    }
+  }, []);
+
+  useEffect(() => setSideOpen(false), [location.pathname]);
+
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="bg-gray-900 text-white px-6 py-3 flex items-center justify-between">
+    <div className="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+      <header className="bg-gray-900 dark:bg-gray-800 text-white px-4 md:px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
+          <button className="md:hidden p-1" onClick={() => setSideOpen(!sideOpen)} aria-label="菜单">
+            {sideOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
           <div className="font-semibold text-lg">PoW CAPTCHA</div>
-          <span className="badge bg-blue-600 text-white">Admin</span>
+          <span className="badge bg-blue-600 text-white text-[11px]">Admin</span>
         </div>
-        <button
-          onClick={() => {
-            clearToken();
-            window.location.reload();
-          }}
-          className="text-sm text-gray-300 hover:text-white flex items-center gap-1"
-        >
-          <LogOut size={14} /> 退出
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={toggleDark} className="p-1 text-gray-300 hover:text-white" title="切换主题">
+            {dark ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            onClick={() => { clearToken(); window.dispatchEvent(new Event('captcha-admin-auth-changed')); }}
+            className="text-sm text-gray-300 hover:text-white flex items-center gap-1"
+          >
+            <LogOut size={14} /> 退出
+          </button>
+        </div>
       </header>
-      <div className="flex flex-1">
-        <nav className="w-56 bg-white border-r border-border p-3">
+      <div className="flex flex-1 overflow-hidden">
+        <nav className={cn(
+          'fixed inset-y-0 left-0 top-[52px] z-40 w-56 bg-white dark:bg-gray-900 border-r border-border dark:border-gray-800 p-3 transition-transform md:relative md:top-0 md:translate-x-0',
+          sideOpen ? 'translate-x-0' : '-translate-x-full'
+        )}>
           {NAV.map((item) => {
-            const active =
-              item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to);
+            const active = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to);
             return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium mb-1 transition-colors',
-                  active
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-gray-700 hover:bg-gray-100'
-                )}
-              >
-                <item.icon size={16} />
-                {item.label}
+              <NavLink key={item.to} to={item.to} className={cn(
+                'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium mb-1 transition-colors',
+                active ? 'bg-primary text-primary-foreground' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+              )}>
+                <item.icon size={16} /> {item.label}
               </NavLink>
             );
           })}
         </nav>
-        <main className="flex-1 p-6 overflow-auto">{children}</main>
+        {sideOpen && <div className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setSideOpen(false)} />}
+        <main className="flex-1 p-4 md:p-6 overflow-auto">
+          <ErrorBoundary>{children}</ErrorBoundary>
+        </main>
       </div>
     </div>
   );
@@ -65,16 +90,8 @@ function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const [authed, setAuthed] = useState(!!getToken());
-  useEffect(() => {
-    const onStorage = () => setAuthed(!!getToken());
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
-
-  if (!authed) {
-    return <Login onSuccess={() => setAuthed(true)} />;
-  }
-
+  useEffect(() => onAuthChange(() => setAuthed(!!getToken())), []);
+  if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
   return (
     <Layout>
       <Routes>

@@ -1,57 +1,52 @@
 import { useState } from 'react';
 import { Lock } from 'lucide-react';
-import { setToken } from '@/lib/api';
+import { setToken, probeAuth } from '@/lib/api';
+import { Spinner } from '@/components/Spinner';
 
 export default function Login({ onSuccess }: { onSuccess: () => void }) {
-  const [token, setTokenInput] = useState('');
+  const [input, setInput] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!token.trim()) return;
+    const val = input.trim();
+    if (!val) { setError('请输入 Admin Token'); return; }
     setLoading(true);
     setError('');
-    try {
-      const res = await fetch('/admin/api/stats', {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (res.status === 401) {
-        setError('Token 错误');
-      } else if (!res.ok) {
-        setError(`HTTP ${res.status}`);
-      } else {
-        setToken(token);
-        onSuccess();
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
+    const ok = await probeAuth(val);
+    setLoading(false);
+    if (ok) {
+      setToken(val);
+      setInput('');
+      onSuccess();
+    } else {
+      setError('Token 错误或服务不可达');
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <form onSubmit={handleSubmit} className="card w-96">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
+      <form onSubmit={handleSubmit} className="card w-96 dark:bg-gray-900">
         <div className="flex items-center gap-2 mb-6">
           <Lock size={20} className="text-primary" />
           <h1 className="text-lg font-semibold">PoW CAPTCHA Admin</h1>
         </div>
-        <label className="block text-sm font-medium mb-2">Admin Token</label>
+        <label htmlFor="admin-token" className="block text-sm font-medium mb-2">Admin Token</label>
         <input
+          id="admin-token"
           type="password"
           autoFocus
           className="input mb-3"
-          value={token}
-          onChange={(e) => setTokenInput(e.target.value)}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
           placeholder="captcha.toml [admin] token"
+          aria-invalid={!!error}
+          aria-describedby={error ? 'login-error' : undefined}
         />
-        {error && (
-          <div className="text-sm text-destructive mb-3">{error}</div>
-        )}
+        {error && <div id="login-error" className="text-sm text-destructive mb-3" role="alert">{error}</div>}
         <button type="submit" disabled={loading} className="btn btn-primary w-full">
-          {loading ? '验证中...' : '登录'}
+          {loading ? <><Spinner className="h-4 w-4" /> 验证中...</> : '登录'}
         </button>
       </form>
     </div>
