@@ -98,7 +98,11 @@ async fn main() {
         "PoW 验证码服务启动：http://{} （{} 站点 | /metrics | 配置热重载{}）",
         addr,
         site_count,
-        if config_path.is_some() { "已启用" } else { "未启用（无配置文件）" }
+        if config_path.is_some() {
+            "已启用"
+        } else {
+            "未启用（无配置文件）"
+        }
     );
 
     let listener = tokio::net::TcpListener::bind(addr)

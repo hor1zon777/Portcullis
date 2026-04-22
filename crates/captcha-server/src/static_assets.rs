@@ -54,10 +54,7 @@ fn guess_mime(file: &str) -> &'static str {
 }
 
 fn build_response(file: &str, body: Vec<u8>) -> Response {
-    let etag = get_etag_map()
-        .get(file)
-        .cloned()
-        .unwrap_or_default();
+    let etag = get_etag_map().get(file).cloned().unwrap_or_default();
 
     Response::builder()
         .status(StatusCode::OK)
@@ -77,10 +74,7 @@ fn build_response(file: &str, body: Vec<u8>) -> Response {
 
 fn serve_file<E: RustEmbed>(file: &str) -> Option<(String, Vec<u8>)> {
     E::get(file).map(|content| {
-        let etag = get_etag_map()
-            .get(file)
-            .cloned()
-            .unwrap_or_default();
+        let etag = get_etag_map().get(file).cloned().unwrap_or_default();
         (etag, content.data.into_owned())
     })
 }
@@ -95,7 +89,10 @@ pub async fn serve_sdk(headers: HeaderMap, Path(file): Path<String>) -> Response
     };
 
     // 304 如果 ETag 匹配
-    if let Some(inm) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+    if let Some(inm) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
         if !etag.is_empty() && inm.contains(&etag) {
             return Response::builder()
                 .status(StatusCode::NOT_MODIFIED)

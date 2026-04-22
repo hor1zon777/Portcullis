@@ -95,8 +95,8 @@ impl RiskTracker {
         }
 
         // 失败率越高 → 增量越大（线性映射到 max_increase）
-        let severity = (rate - self.config.fail_rate_threshold)
-            / (1.0 - self.config.fail_rate_threshold);
+        let severity =
+            (rate - self.config.fail_rate_threshold) / (1.0 - self.config.fail_rate_threshold);
         let increase = (severity * self.config.dynamic_diff_max_increase as f64).ceil() as u8;
         increase.min(self.config.dynamic_diff_max_increase)
     }

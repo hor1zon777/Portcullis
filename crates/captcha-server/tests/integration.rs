@@ -60,11 +60,7 @@ async fn post_json<T: DeserializeOwned>(
     (status, parsed)
 }
 
-async fn post_raw(
-    app: &axum::Router,
-    path: &str,
-    body: serde_json::Value,
-) -> StatusCode {
+async fn post_raw(app: &axum::Router, path: &str, body: serde_json::Value) -> StatusCode {
     let req = Request::builder()
         .method("POST")
         .uri(path)
@@ -141,8 +137,14 @@ async fn replay_rejected() {
     let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).unwrap();
 
     let body = json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce });
-    assert_eq!(post_raw(&app, "/api/v1/verify", body.clone()).await, StatusCode::OK);
-    assert_eq!(post_raw(&app, "/api/v1/verify", body).await, StatusCode::CONFLICT);
+    assert_eq!(
+        post_raw(&app, "/api/v1/verify", body.clone()).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post_raw(&app, "/api/v1/verify", body).await,
+        StatusCode::CONFLICT
+    );
 }
 
 #[tokio::test]

@@ -23,10 +23,7 @@ pub struct ChallengeResponse {
     pub sig: String,
 }
 
-pub(crate) fn check_origin(
-    headers: &HeaderMap,
-    origins: &[String],
-) -> Result<(), AppError> {
+pub(crate) fn check_origin(headers: &HeaderMap, origins: &[String]) -> Result<(), AppError> {
     if origins.is_empty() {
         return Ok(());
     }

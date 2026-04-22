@@ -12,12 +12,7 @@ struct Payload {
 
 /// 生成 captcha_token，格式：`base64url(payload_json).base64url(sig)`。
 /// 业务后端通过 /siteverify 调用本服务进行校验。
-pub fn generate(
-    challenge_id: &str,
-    site_key: &str,
-    ttl_secs: u64,
-    secret: &[u8],
-) -> (String, u64) {
+pub fn generate(challenge_id: &str, site_key: &str, ttl_secs: u64, secret: &[u8]) -> (String, u64) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

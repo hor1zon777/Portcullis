@@ -6,8 +6,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// 使用 HMAC-SHA256 对数据签名。
 pub fn sign(data: &[u8], secret: &[u8]) -> [u8; 32] {
-    let mut mac =
-        HmacSha256::new_from_slice(secret).expect("HMAC 接受任意长度密钥");
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC 接受任意长度密钥");
     mac.update(data);
     let result = mac.finalize();
     let mut out = [0u8; 32];

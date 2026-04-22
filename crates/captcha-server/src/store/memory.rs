@@ -33,7 +33,9 @@ impl MemoryStore {
 
     pub fn mark_challenge_used(&self, id: &str, exp_ms: u64) -> bool {
         self.enforce_capacity();
-        self.challenges_used.insert(id.to_string(), exp_ms).is_none()
+        self.challenges_used
+            .insert(id.to_string(), exp_ms)
+            .is_none()
     }
 
     pub fn mark_token_used(&self, challenge_id: &str, exp_ms: u64) -> bool {

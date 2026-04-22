@@ -67,11 +67,7 @@ async fn do_verify(
         .try_into()
         .map_err(|_| AppError::BadRequest("sig 长度必须为 32 字节".to_string()))?;
 
-    if !crypto::verify_sig(
-        &req.challenge.to_sign_bytes(),
-        &sig_arr,
-        &config.secret,
-    ) {
+    if !crypto::verify_sig(&req.challenge.to_sign_bytes(), &sig_arr, &config.secret) {
         return Err(AppError::Unauthorized("签名验证失败".to_string()));
     }
 

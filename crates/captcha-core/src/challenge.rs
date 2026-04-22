@@ -51,9 +51,7 @@ fn ser_salt<S: Serializer>(salt: &[u8; 16], s: S) -> Result<S::Ok, S::Error> {
 
 fn de_salt<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 16], D::Error> {
     let encoded = String::deserialize(d)?;
-    let bytes = B64
-        .decode(&encoded)
-        .map_err(serde::de::Error::custom)?;
+    let bytes = B64.decode(&encoded).map_err(serde::de::Error::custom)?;
     bytes
         .try_into()
         .map_err(|_| serde::de::Error::custom("salt 必须为 16 字节"))

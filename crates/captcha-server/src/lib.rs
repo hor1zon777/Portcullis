@@ -64,8 +64,7 @@ pub fn build_router(
     }
 
     if let Some(lim) = limiter {
-        router =
-            router.route_layer(middleware::from_fn_with_state(lim, rate_limit_middleware));
+        router = router.route_layer(middleware::from_fn_with_state(lim, rate_limit_middleware));
     }
 
     router

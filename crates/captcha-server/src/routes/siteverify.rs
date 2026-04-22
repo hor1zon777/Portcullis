@@ -41,11 +41,11 @@ pub async fn site_verify(
 ) -> Result<Json<SiteVerifyResponse>, AppError> {
     // 1. 验证 token 签名 + 过期
     let cfg = state.config.load();
-    let (challenge_id, site_key, token_exp) =
-        match token::verify_with_exp(&req.token, &cfg.secret) {
-            Some(v) => v,
-            None => return Ok(fail("token 无效或已过期")),
-        };
+    let (challenge_id, site_key, token_exp) = match token::verify_with_exp(&req.token, &cfg.secret)
+    {
+        Some(v) => v,
+        None => return Ok(fail("token 无效或已过期")),
+    };
 
     // 2. 常数时间比较 secret_key
     let site = match cfg.get_site(&site_key) {

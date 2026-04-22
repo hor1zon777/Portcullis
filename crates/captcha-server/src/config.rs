@@ -188,12 +188,10 @@ fn load_toml(explicit_path: Option<&PathBuf>) -> (Option<TomlConfig>, Option<Pat
 
     for path in candidates {
         if path.exists() {
-            let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-                panic!("读取配置文件 {} 失败: {e}", path.display())
-            });
-            let cfg: TomlConfig = toml::from_str(&content).unwrap_or_else(|e| {
-                panic!("解析配置文件 {} 失败: {e}", path.display())
-            });
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("读取配置文件 {} 失败: {e}", path.display()));
+            let cfg: TomlConfig = toml::from_str(&content)
+                .unwrap_or_else(|e| panic!("解析配置文件 {} 失败: {e}", path.display()));
             tracing::info!("已加载配置文件: {}", path.display());
             return (Some(cfg), Some(path));
         }
