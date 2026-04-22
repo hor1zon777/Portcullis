@@ -41,7 +41,7 @@ export function render(
   return new Widget(container, {
     siteKey: options.siteKey,
     endpoint,
-    wasmBase: options.wasmBase?.replace(/\/$/, '') ?? `${endpoint}/pkg`,
+    wasmBase: options.wasmBase?.replace(/\/$/, '') ?? `${endpoint}/sdk`,
     theme: options.theme ?? 'light',
     lang: options.lang ?? 'zh-CN',
     maxIters: options.maxIters ?? 10_000_000,
