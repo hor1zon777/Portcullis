@@ -1,6 +1,7 @@
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -23,45 +24,47 @@ pub struct SiteVerifyResponse {
     pub error: Option<String>,
 }
 
+fn fail(msg: &str) -> Json<SiteVerifyResponse> {
+    Json(SiteVerifyResponse {
+        success: false,
+        challenge_id: None,
+        site_key: None,
+        error: Some(msg.to_string()),
+    })
+}
+
 /// POST /api/v1/siteverify
-/// 业务后端用自己的 secret_key 核验 captcha_token。
-/// 设计上不返回 4xx，而是用 body.success=false 告知失败原因，
-/// 便于业务后端统一处理。
 pub async fn site_verify(
     State(state): State<AppState>,
     Json(req): Json<SiteVerifyRequest>,
 ) -> Result<Json<SiteVerifyResponse>, AppError> {
-    let (challenge_id, site_key) = match token::verify(&req.token, &state.config.secret) {
-        Some(v) => v,
-        None => {
-            return Ok(Json(SiteVerifyResponse {
-                success: false,
-                challenge_id: None,
-                site_key: None,
-                error: Some("token 无效或已过期".to_string()),
-            }));
-        }
-    };
+    // 1. 验证 token 签名 + 过期
+    let (challenge_id, site_key, token_exp) =
+        match token::verify_with_exp(&req.token, &state.config.secret) {
+            Some(v) => v,
+            None => return Ok(fail("token 无效或已过期")),
+        };
 
-    // 校验 secret_key 与 site_key 绑定
-    match state.config.get_site(&site_key) {
-        Some(s) if s.secret_key == req.secret_key => {}
-        Some(_) => {
-            return Ok(Json(SiteVerifyResponse {
-                success: false,
-                challenge_id: None,
-                site_key: None,
-                error: Some("secret_key 不匹配".to_string()),
-            }));
-        }
-        None => {
-            return Ok(Json(SiteVerifyResponse {
-                success: false,
-                challenge_id: None,
-                site_key: None,
-                error: Some("site_key 已下线".to_string()),
-            }));
-        }
+    // 2. 常数时间比较 secret_key（防时序攻击）
+    let site = match state.config.get_site(&site_key) {
+        Some(s) => s,
+        None => return Ok(fail("site_key 已下线")),
+    };
+    let expected = site.secret_key.as_bytes();
+    let provided = req.secret_key.as_bytes();
+    let len_match = expected.len() == provided.len();
+    let content_match: bool = if len_match {
+        expected.ct_eq(provided).into()
+    } else {
+        false
+    };
+    if !content_match {
+        return Ok(fail("secret_key 不匹配"));
+    }
+
+    // 3. token 单次使用（同一 challenge_id 只能核验一次）
+    if !state.store.mark_token_used(&challenge_id, token_exp) {
+        return Ok(fail("token 已被核验过（单次使用）"));
     }
 
     Ok(Json(SiteVerifyResponse {

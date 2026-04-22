@@ -38,6 +38,11 @@ pub fn generate(
 
 /// 校验 captcha_token。成功返回 `(challenge_id, site_key)`，失败返回 `None`。
 pub fn verify(token: &str, secret: &[u8]) -> Option<(String, String)> {
+    verify_with_exp(token, secret).map(|(cid, sk, _)| (cid, sk))
+}
+
+/// 校验 captcha_token，同时返回过期时间戳。
+pub fn verify_with_exp(token: &str, secret: &[u8]) -> Option<(String, String, u64)> {
     let (payload_b64, sig_b64) = token.split_once('.')?;
 
     let payload_bytes = B64.decode(payload_b64).ok()?;
@@ -58,7 +63,7 @@ pub fn verify(token: &str, secret: &[u8]) -> Option<(String, String)> {
         return None;
     }
 
-    Some((payload.challenge_id, payload.site_key))
+    Some((payload.challenge_id, payload.site_key, payload.exp))
 }
 
 #[cfg(test)]

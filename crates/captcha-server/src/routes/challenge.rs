@@ -1,4 +1,5 @@
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::Json;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use captcha_core::{challenge::Challenge, crypto};
@@ -6,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::state::AppState;
+
+/// site_key 最大长度（字节），防止恶意超长输入
+const MAX_SITE_KEY_LEN: usize = 64;
 
 #[derive(Debug, Deserialize)]
 pub struct ChallengeRequest {
@@ -16,20 +20,53 @@ pub struct ChallengeRequest {
 pub struct ChallengeResponse {
     pub success: bool,
     pub challenge: Challenge,
-    /// 服务端对 challenge 的 HMAC 签名，base64 标准编码
     pub sig: String,
 }
 
+/// 校验 Origin header 与该站点配置的白名单是否匹配。
+/// - 若 Origin header 不存在（服务端到服务端调用）：放行
+/// - 若 site.origins 为空（未配置白名单）：放行
+/// - 否则必须精确匹配
+pub(crate) fn check_origin(
+    headers: &HeaderMap,
+    origins: &[String],
+) -> Result<(), AppError> {
+    if origins.is_empty() {
+        return Ok(());
+    }
+    let Some(origin_value) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
+        return Ok(());
+    };
+    if origins.iter().any(|o| o == origin_value) {
+        Ok(())
+    } else {
+        tracing::warn!(origin = %origin_value, "Origin 不在白名单内，拒绝请求");
+        Err(AppError::Unauthorized(format!(
+            "Origin '{}' 不在白名单",
+            origin_value
+        )))
+    }
+}
+
 /// POST /api/v1/challenge
-/// 按 site_key 的配置发放新挑战，完全无状态（未写入 store）。
 pub async fn create(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, AppError> {
+    if req.site_key.len() > MAX_SITE_KEY_LEN {
+        return Err(AppError::BadRequest(format!(
+            "site_key 过长（> {} 字节）",
+            MAX_SITE_KEY_LEN
+        )));
+    }
+
     let site = state
         .config
         .get_site(&req.site_key)
         .ok_or_else(|| AppError::BadRequest(format!("未知的 site_key: {}", req.site_key)))?;
+
+    check_origin(&headers, &site.origins)?;
 
     let mut salt = [0u8; 16];
     getrandom::getrandom(&mut salt)

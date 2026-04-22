@@ -129,6 +129,16 @@ impl Config {
             tracing::warn!("未配置任何站点（sites 为空）。请在 captcha.toml 添加 [[sites]] 段或设置 CAPTCHA_SITES 环境变量。");
         }
 
+        // 校验 secret_key 最小长度
+        for (key, site) in &sites {
+            assert!(
+                site.secret_key.len() >= 16,
+                "站点 '{}' 的 secret_key 长度必须 >= 16 字节，当前 {} 字节",
+                key,
+                site.secret_key.len()
+            );
+        }
+
         let challenge_ttl_secs = std::env::var("CAPTCHA_CHALLENGE_TTL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())

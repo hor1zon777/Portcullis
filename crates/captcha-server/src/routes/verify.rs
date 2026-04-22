@@ -1,10 +1,12 @@
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::Json;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use captcha_core::{challenge::Challenge, crypto, pow};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
+use crate::routes::challenge::check_origin;
 use crate::state::AppState;
 use crate::token;
 
@@ -23,11 +25,16 @@ pub struct VerifyResponse {
 }
 
 /// POST /api/v1/verify
-/// 依次校验：签名 → 过期 → 防重放 → PoW 解答，成功后发放 captcha_token。
 pub async fn verify(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
+    // 0. Origin 白名单校验
+    if let Some(site) = state.config.get_site(&req.challenge.site_key) {
+        check_origin(&headers, &site.origins)?;
+    }
+
     // 1. 签名
     let sig_vec = B64
         .decode(&req.sig)
@@ -50,10 +57,10 @@ pub async fn verify(
         return Err(AppError::BadRequest("挑战已过期".to_string()));
     }
 
-    // 3. 防重放（先于 PoW 计算，避免用废挑战消耗服务端 CPU）
+    // 3. 防重放
     if !state
         .store
-        .mark_used(&req.challenge.id, req.challenge.exp)
+        .mark_challenge_used(&req.challenge.id, req.challenge.exp)
     {
         return Err(AppError::Conflict("挑战已被使用".to_string()));
     }
