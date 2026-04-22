@@ -1,15 +1,35 @@
 {
   "name": "pow-captcha-sdk",
-  "version": "0.1.0",
-  "description": "PoW CAPTCHA 浏览器端 SDK（Argon2id 挖矿）",
+  "version": "0.3.0",
+  "description": "PoW CAPTCHA 浏览器端 SDK — Argon2id 挖矿验证码，一行 <script> 标签接入",
   "type": "module",
-  "main": "dist/pow-captcha.umd.cjs",
-  "module": "dist/pow-captcha.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/pow-captcha.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "default": "./dist/pow-captcha.js"
+    },
+    "./auto-mount": "./dist/pow-captcha.js"
+  },
   "files": [
     "dist",
+    "src",
     "pkg"
   ],
+  "keywords": [
+    "captcha",
+    "pow",
+    "proof-of-work",
+    "argon2",
+    "wasm",
+    "bot-protection"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/user/pow-captcha"
+  },
   "scripts": {
     "build": "vite build",
     "dev": "vite",
@@ -17,7 +37,6 @@
   },
   "devDependencies": {
     "typescript": "^5.7.0",
-    "vite": "^6.0.0",
-    "vite-plugin-dts": "^4.3.0"
+    "vite": "^6.0.0"
   }
 }

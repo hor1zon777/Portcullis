@@ -26,6 +26,12 @@ pub enum Commands {
     GenConfig,
     /// 生成 32 字节随机密钥（十六进制）
     GenSecret,
+    /// 健康检查（TCP 探测指定地址，Docker healthcheck 用）
+    Healthcheck {
+        /// 探测地址，默认 127.0.0.1:8787
+        #[arg(default_value = "127.0.0.1:8787")]
+        addr: String,
+    },
 }
 
 /// TOML 配置的反序列化结构。
@@ -160,7 +166,8 @@ impl Config {
         }
     }
 
-    /// 兼容旧接口：从纯环境变量加载（测试用）。
+    /// 测试专用：从纯环境变量加载。
+    #[cfg(test)]
     pub fn from_env() -> Self {
         Self::load(&Cli {
             config: None,
@@ -197,11 +204,8 @@ fn load_toml(explicit_path: Option<&PathBuf>) -> Option<TomlConfig> {
         }
     }
 
-    if explicit_path.is_some() {
-        panic!(
-            "指定的配置文件不存在: {}",
-            explicit_path.unwrap().display()
-        );
+    if let Some(p) = explicit_path {
+        panic!("指定的配置文件不存在: {}", p.display());
     }
 
     None

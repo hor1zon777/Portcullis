@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
 WORKDIR /build
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN wasm-pack build crates/captcha-wasm \
     --target web --release --out-dir /wasm-out
@@ -19,8 +19,8 @@ FROM node:22-alpine AS sdk-builder
 RUN npm install -g pnpm@10
 WORKDIR /sdk
 
-COPY sdk/package.json sdk/tsconfig.json sdk/vite.config.ts ./
-RUN pnpm install
+COPY sdk/package.json sdk/pnpm-lock.yaml* sdk/tsconfig.json sdk/vite.config.ts ./
+RUN pnpm install --frozen-lockfile || pnpm install
 
 COPY sdk/src ./src
 COPY sdk/index.html ./
@@ -35,16 +35,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-# 把 SDK + WASM 产物拷过来，rust-embed 会在编译期读取
 COPY --from=sdk-builder /sdk/dist ./sdk/dist
 COPY --from=wasm-builder /wasm-out ./sdk/pkg
 
 RUN cargo build --release -p captcha-server
 
-# ========== Stage 4: 运行时（Distroless，最小化）==========
+# ========== Stage 4: 运行时 ==========
 FROM gcr.io/distroless/cc-debian12
 
 COPY --from=rust-builder /build/target/release/captcha-server /captcha-server

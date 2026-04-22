@@ -20,7 +20,7 @@ pub fn generate(
 ) -> (String, u64) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("系统时钟异常")
+        .unwrap_or_default()
         .as_millis() as u64;
     let exp = now_ms + ttl_secs * 1000;
 
@@ -29,7 +29,7 @@ pub fn generate(
         site_key: site_key.to_string(),
         exp,
     };
-    let payload_json = serde_json::to_vec(&payload).expect("payload 序列化失败");
+    let payload_json = serde_json::to_vec(&payload).unwrap_or_default();
     let sig = crypto::sign(&payload_json, secret);
 
     let token = format!("{}.{}", B64.encode(&payload_json), B64.encode(sig));

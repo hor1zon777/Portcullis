@@ -10,7 +10,8 @@ services:
     command: ["--config", "/etc/captcha/captcha.toml"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "/captcha-server", "--help"]
+      test: ["CMD", "/captcha-server", "healthcheck", "127.0.0.1:8787"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 5s

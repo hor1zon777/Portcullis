@@ -20,6 +20,10 @@ async fn main() {
                 config::print_gen_secret();
                 return;
             }
+            Commands::Healthcheck { addr } => {
+                run_healthcheck(addr);
+                return;
+            }
         }
     }
 
@@ -69,4 +73,24 @@ async fn main() {
     )
     .await
     .expect("服务运行异常");
+}
+
+fn run_healthcheck(addr: &str) {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let parsed: SocketAddr = match addr.parse() {
+        Ok(a) => a,
+        Err(_) => {
+            eprintln!("无效地址: {addr}");
+            std::process::exit(2);
+        }
+    };
+    match TcpStream::connect_timeout(&parsed, Duration::from_secs(3)) {
+        Ok(_) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("健康检查失败: {e}");
+            std::process::exit(1);
+        }
+    }
 }

@@ -39,7 +39,7 @@ pub fn compute_base_hash(challenge: &Challenge) -> [u8; ARGON2_OUT] {
 pub fn compute_pow_hash(base: &[u8; 32], nonce: u64) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(base);
-    hasher.update(&nonce.to_le_bytes());
+    hasher.update(nonce.to_le_bytes());
     let result = hasher.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&result);

@@ -47,6 +47,10 @@ impl MemoryStore {
     pub fn len(&self) -> usize {
         self.challenges_used.len() + self.tokens_used.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.challenges_used.is_empty() && self.tokens_used.is_empty()
+    }
 }
 
 impl Default for MemoryStore {

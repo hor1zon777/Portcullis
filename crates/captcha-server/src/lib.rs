@@ -11,6 +11,7 @@ use axum::http::HeaderValue;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -56,6 +57,8 @@ pub fn build_router(app_state: AppState, limiter: Option<IpRateLimiter>) -> Rout
     router
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT))
+        // gzip / br 压缩，对 /sdk/*.js 和大响应体尤其有用
+        .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),

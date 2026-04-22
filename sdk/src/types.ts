@@ -52,26 +52,3 @@ export interface CaptchaWidget {
   getResponse(): string | null;
   destroy(): void;
 }
-
-/** Worker 内部消息：主线程 → Worker */
-export type WorkerRequest =
-  | { type: 'init'; wasmBase: string }
-  | {
-      type: 'solve';
-      payloadJson: string;
-      maxIters: number;
-      reportInterval: number;
-    };
-
-/** Worker 内部消息：Worker → 主线程 */
-export type WorkerResponse =
-  | { type: 'ready' }
-  | { type: 'progress'; attempts: number }
-  | {
-      type: 'solved';
-      nonce: number;
-      hash: string;
-      attempts: number;
-      elapsedMs: number;
-    }
-  | { type: 'error'; message: string };

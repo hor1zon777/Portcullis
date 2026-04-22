@@ -6,7 +6,8 @@
       "Bash(wasm-pack build *)",
       "Bash(pnpm type-check *)",
       "Bash(pnpm build *)",
-      "Bash(cargo search *)"
+      "Bash(cargo search *)",
+      "Bash(cargo clippy *)"
     ]
   }
 }
