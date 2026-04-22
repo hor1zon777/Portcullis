@@ -183,4 +183,3 @@ jobs:
         with:
           files: ./artifacts/**/captcha-server-*.{tar.gz,zip}
           generate_release_notes: true
-          generate_release_notes: true
