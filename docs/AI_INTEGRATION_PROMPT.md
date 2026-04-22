@@ -1,12 +1,13 @@
-# PoW CAPTCHA 接入指南（AI Prompt）
+# Portcullis — PoW CAPTCHA 接入指南（AI Prompt）
 
-> 本文档面向 AI 编程助手（Claude、GPT、Copilot 等），用于快速理解 PoW CAPTCHA 服务并生成接入代码。
+> 本文档面向 AI 编程助手（Claude、GPT、Copilot 等），用于快速理解 Portcullis PoW CAPTCHA 服务并生成接入代码。
+> 仓库地址：https://github.com/hor1zon777/Portcullis
 
 ---
 
-## 你是什么
+## 服务简介
 
-PoW CAPTCHA 是一个自托管的验证码服务，用工作量证明（Proof of Work）替代传统图像/滑块验证。用户点击后浏览器自动完成 Argon2id + SHA-256 挖矿计算，约 1-2 秒通过验证。
+Portcullis 是一个自托管的验证码服务，用工作量证明（Proof of Work）替代传统图像/滑块验证。用户点击后浏览器自动完成 Argon2id + SHA-256 挖矿计算，约 1-2 秒通过验证。
 
 ## 核心架构
 
@@ -18,13 +19,25 @@ PoW CAPTCHA 是一个自托管的验证码服务，用工作量证明（Proof of
 业务后端 ─⑤ POST /api/v1/siteverify─► 验证服务 （核验 token）
 ```
 
+**Docker 部署架构（3 个容器 + 1 个对外端口）：**
+
+```
+Nginx(:NGINX_PORT) → /admin/*       → admin-ui 容器（React 管理面板）
+                   → /admin/api/*   → captcha-server 容器（管理 API）
+                   → /api/v1/*      → captcha-server 容器（公共 API）
+                   → /sdk/*         → captcha-server 容器（SDK + WASM）
+                   → /metrics       → captcha-server 容器（Prometheus）
+```
+
+---
+
 ## 前端接入（零 JS 代码）
 
 在 HTML 中加入以下 3 行即可：
 
 ```html
-<script src="https://你的验证服务域名/sdk/pow-captcha.js"
-        data-site-key="你的站点公钥"></script>
+<script src="https://你的验证服务地址/sdk/pow-captcha.js"
+        data-site-key="pk_xxxxxxxxxxxxxxxxxxxxxxxx"></script>
 
 <div data-pow-captcha data-target="captcha_token"></div>
 <input type="hidden" name="captcha_token" id="captcha_token" />
@@ -42,9 +55,9 @@ PoW CAPTCHA 是一个自托管的验证码服务，用工作量证明（Proof of
 **`<script>` 上：**
 | 属性 | 说明 |
 |------|------|
-| `data-site-key` | 站点公钥（必填，从管理面板获取） |
-| `data-endpoint` | 覆盖 API 地址（默认从 src 自动推导） |
-| `data-wasm-base` | 覆盖 WASM 路径（默认从 src 自动推导） |
+| `data-site-key` | 站点公钥（必填，格式 `pk_<hex>`，从管理面板获取） |
+| `data-endpoint` | 覆盖 API 地址（默认从 script src 自动推导） |
+| `data-wasm-base` | 覆盖 WASM 路径（默认从 script src 自动推导） |
 
 **`<div data-pow-captcha>` 上：**
 | 属性 | 说明 |
@@ -60,8 +73,8 @@ PoW CAPTCHA 是一个自托管的验证码服务，用工作量证明（Proof of
 
 ```javascript
 const widget = PowCaptcha.render('#container', {
-  siteKey: '你的站点公钥',
-  endpoint: 'https://你的验证服务域名',
+  siteKey: 'pk_xxxxxxxxxxxxxxxxxxxxxxxx',
+  endpoint: 'https://你的验证服务地址',
   theme: 'light',
   lang: 'zh-CN',
   onSuccess: (token) => { /* token 可用 */ },
@@ -83,12 +96,12 @@ widget.destroy();            // 销毁
 ### API 端点
 
 ```
-POST https://你的验证服务域名/api/v1/siteverify
+POST https://你的验证服务地址/api/v1/siteverify
 Content-Type: application/json
 
 {
   "token": "用户提交的 captcha_token",
-  "secret_key": "你的站点私钥"
+  "secret_key": "你的站点私钥（从管理面板获取）"
 }
 ```
 
@@ -120,7 +133,7 @@ Content-Type: application/json
 app.post('/api/login', async (req, res) => {
   const { captcha_token } = req.body;
   
-  const r = await fetch('https://captcha.example.com/api/v1/siteverify', {
+  const r = await fetch(process.env.CAPTCHA_ENDPOINT + '/api/v1/siteverify', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -141,10 +154,10 @@ app.post('/api/login', async (req, res) => {
 #### Python（FastAPI）
 
 ```python
-import httpx
+import os, httpx
 from fastapi import FastAPI, HTTPException
 
-CAPTCHA_ENDPOINT = "https://captcha.example.com"
+CAPTCHA_ENDPOINT = os.environ["CAPTCHA_ENDPOINT"]
 CAPTCHA_SECRET_KEY = os.environ["CAPTCHA_SECRET_KEY"]
 
 @app.post("/api/login")
@@ -198,7 +211,7 @@ function verifyCaptcha($token, $endpoint, $secretKey) {
 #### curl
 
 ```bash
-curl -X POST https://captcha.example.com/api/v1/siteverify \
+curl -X POST https://你的验证服务地址/api/v1/siteverify \
   -H 'content-type: application/json' \
   -d '{"token":"<captcha_token>","secret_key":"<secret_key>"}'
 ```
@@ -209,21 +222,22 @@ curl -X POST https://captcha.example.com/api/v1/siteverify \
 
 | 端点 | 方法 | 说明 | 调用方 |
 |------|------|------|--------|
-| `/api/v1/challenge` | POST | 发放 PoW 挑战 | 浏览器 SDK |
-| `/api/v1/verify` | POST | 提交解答换取 token | 浏览器 SDK |
-| `/api/v1/verify/batch` | POST | 批量校验（最多 20 条） | 浏览器 SDK |
-| `/api/v1/siteverify` | POST | 核验 token（业务后端调用） | 业务后端 |
-| `/sdk/pow-captcha.js` | GET | 浏览器 SDK 脚本 | 浏览器 |
-| `/sdk/captcha_wasm_bg.wasm` | GET | WASM 求解器 | 浏览器 SDK |
-| `/admin/api/*` | * | 管理面板 API（需 Bearer Token） | 管理面板 |
+| `/api/v1/challenge` | POST | 发放 PoW 挑战 | 浏览器 SDK（自动） |
+| `/api/v1/verify` | POST | 提交解答换取 token | 浏览器 SDK（自动） |
+| `/api/v1/verify/batch` | POST | 批量校验（最多 20 条） | 业务后端（可选） |
+| `/api/v1/siteverify` | POST | 核验 token | 业务后端（必须） |
+| `/sdk/pow-captcha.js` | GET | 浏览器 SDK 脚本 | 前端页面 |
+| `/sdk/captcha_wasm_bg.wasm` | GET | WASM 求解器 | SDK 自动加载 |
+| `/admin/` | GET | React 管理面板 | 管理员浏览器 |
+| `/admin/api/*` | * | 管理 API（需 Bearer Token） | 管理面板 |
 | `/metrics` | GET | Prometheus 指标 | 监控系统 |
-| `/healthz` | GET | 健康检查 | 运维 |
+| `/healthz` | GET | 健康检查 | 运维 / LB |
 
 ### `/api/v1/challenge` 请求/响应
 
 ```json
 // 请求
-{ "site_key": "pk_xxx" }
+{ "site_key": "pk_xxxxxxxxxxxxxxxxxxxxxxxx" }
 
 // 响应
 {
@@ -233,7 +247,7 @@ curl -X POST https://captcha.example.com/api/v1/siteverify \
     "salt": "base64...",
     "diff": 18,
     "exp": 1737900000000,
-    "site_key": "pk_xxx"
+    "site_key": "pk_xxxxxxxxxxxxxxxxxxxxxxxx"
   },
   "sig": "base64..."
 }
@@ -266,54 +280,77 @@ curl -X POST https://captcha.example.com/api/v1/siteverify \
 
 ## 部署信息
 
-### Docker Compose（推荐）
+### Docker Compose 部署（推荐）
+
+只需要 `.env` 和 `docker-compose.yml` 两个文件，镜像从 ghcr.io 拉取：
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/hor1zon777/Portcullis.git
-cd Portcullis
+# 1. 获取配置文件
+wget https://raw.githubusercontent.com/hor1zon777/Portcullis/main/.env.example -O .env
+wget https://raw.githubusercontent.com/hor1zon777/Portcullis/main/docker-compose.yml
 
-# 2. 生成配置
-cp .env.example .env
-# 编辑 .env，用 openssl rand -hex 32 生成密钥
+# 2. 编辑 .env
+# 用 openssl rand -hex 32 生成密钥，填入 CAPTCHA_SECRET 和 CAPTCHA_ADMIN_TOKEN
 
-# 3. 启动
+# 3. 启动（3 个容器：captcha-server + admin-ui + nginx）
 docker compose up -d
-# → http://localhost/admin/    管理面板
-# → http://localhost/api/...   API
-# → http://localhost/sdk/...   SDK
+
+# 访问（端口由 .env 中 NGINX_PORT 控制，默认 80）：
+# 管理面板：http://localhost/admin/
+# 公共 API：http://localhost/api/v1/...
+# SDK 脚本：http://localhost/sdk/pow-captcha.js
 ```
 
 ### 本地开发
 
 ```bash
-# 有 .env 文件后直接启动
+git clone https://github.com/hor1zon777/Portcullis.git
+cd Portcullis
+cp .env.example .env   # 编辑填入密钥
+
+# Rust 服务（自动加载 .env）
 cargo run -p captcha-server
 
-# 管理面板开发
-cd admin-ui && pnpm dev
+# React 管理面板开发（另一个终端）
+cd admin-ui && pnpm install && pnpm dev
+# → http://localhost:5174/admin/
 ```
 
 ### 环境变量
 
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `CAPTCHA_SECRET` | 是 | HMAC 签名密钥（>= 32 字节） |
-| `CAPTCHA_BIND` | 否 | 监听地址，默认 `0.0.0.0:8787` |
-| `CAPTCHA_ADMIN_TOKEN` | 否 | 管理面板认证 Token |
-| `CAPTCHA_DB_PATH` | 否 | SQLite 路径，默认 `data/captcha.db` |
-| `CAPTCHA_SITES` | 否 | 初始站点 JSON（首次 seed 到 DB） |
-| `CAPTCHA_CHALLENGE_TTL_SECS` | 否 | 挑战有效期，默认 120 |
-| `CAPTCHA_TOKEN_TTL_SECS` | 否 | Token 有效期，默认 300 |
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `CAPTCHA_SECRET` | 是 | — | HMAC 签名密钥（>= 32 字节 hex） |
+| `CAPTCHA_BIND` | 否 | `0.0.0.0:8787` | 服务端监听地址 |
+| `CAPTCHA_ADMIN_TOKEN` | 否 | — | 管理面板认证 Token |
+| `CAPTCHA_DB_PATH` | 否 | `data/captcha.db` | SQLite 数据库路径 |
+| `CAPTCHA_SITES` | 否 | — | 初始站点 JSON（仅首次 seed） |
+| `CAPTCHA_CHALLENGE_TTL_SECS` | 否 | `120` | 挑战有效期（秒） |
+| `CAPTCHA_TOKEN_TTL_SECS` | 否 | `300` | Token 有效期（秒） |
+| `NGINX_PORT` | 否 | `80` | Docker Nginx 对外端口 |
+
+### 站点管理
+
+站点（site_key + secret_key）通过管理面板创建和管理：
+
+1. 访问 `http://你的地址/admin/`，输入 `CAPTCHA_ADMIN_TOKEN` 登录
+2. 进入「站点」页，点击「新增站点」
+3. 设置难度（diff）和 Origins 白名单，点击创建
+4. 系统自动生成 `site_key`（格式 `pk_<hex>`）和 `secret_key`
+5. `site_key` 放前端 HTML，`secret_key` 放业务后端环境变量
+
+所有站点数据持久化在 SQLite，重启不丢失。
 
 ---
 
 ## 给 AI 的额外上下文
 
-- 前端 SDK 是 IIFE 格式（`pow-captcha.js`），通过 `<script>` 加载后自动注册 `window.PowCaptcha`
-- SDK 内部使用 WebAssembly 执行 Argon2id 计算，不依赖 Web Worker
+- 项目名 **Portcullis**（城堡吊闸），仓库 `hor1zon777/Portcullis`
+- 前端 SDK 是 IIFE 格式（`pow-captcha.js`），`<script>` 加载后注册 `window.PowCaptcha`
+- SDK 内部使用 WebAssembly 执行 Argon2id 计算，不依赖 Web Worker（chunked 主线程）
 - `captcha_token` 格式为 `base64url(payload).base64url(hmac_sig)`，5 分钟有效，单次使用
-- 站点通过管理面板（`/admin/`）创建，密钥由服务端自动生成
-- 难度参数 `diff` 控制前导零比特数：14 ≈ 0.2s，18 ≈ 1s，20 ≈ 3s（桌面端）
-- 所有数据持久化在 SQLite（`data/captcha.db`）
-- 仓库地址：https://github.com/hor1zon777/Portcullis
+- `site_key` 格式 `pk_<24位hex>`，`secret_key` 为 `64位hex`，均由服务端自动生成
+- 难度参数 `diff` 控制前导零比特数：14 ≈ 0.2s，16 ≈ 0.5s，18 ≈ 1s，20 ≈ 3s（桌面端）
+- 所有数据持久化在 SQLite（`data/captcha.db`），管理面板操作即时写入 DB
+- Docker 部署 3 个容器（captcha-server + admin-ui + nginx），统一通过 `NGINX_PORT` 端口对外
+- 配置通过 `.env` 文件管理，服务启动时通过 `dotenvy` 自动加载
