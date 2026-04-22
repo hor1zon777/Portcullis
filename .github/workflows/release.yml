@@ -108,25 +108,61 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tag metadata
-        id: meta
+      - name: Server image metadata
+        id: meta-server
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}/server
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - uses: docker/build-push-action@v6
+      - name: Admin UI image metadata
+        id: meta-admin
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/admin-ui
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Nginx image metadata
+        id: meta-nginx
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/nginx
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Build & push server
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-server.outputs.tags }}
+          labels: ${{ steps.meta-server.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build & push admin-ui
+        uses: docker/build-push-action@v6
+        with:
+          context: ./admin-ui
+          push: true
+          tags: ${{ steps.meta-admin.outputs.tags }}
+          labels: ${{ steps.meta-admin.outputs.labels }}
+
+      - name: Build & push nginx
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nginx
+          push: true
+          tags: ${{ steps.meta-nginx.outputs.tags }}
+          labels: ${{ steps.meta-nginx.outputs.labels }}
 
   # ─────────── 3. GitHub Release ───────────
   release:

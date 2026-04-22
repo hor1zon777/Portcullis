@@ -3,12 +3,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["--config", "/etc/captcha/captcha.toml"]
-    volumes:
-      - ./captcha.toml:/etc/captcha/captcha.toml:ro
-      - ./data:/data
+    env_file: .env
     environment:
       - CAPTCHA_DB_PATH=/data/captcha.db
+    volumes:
+      - ./data:/data
     expose:
       - "8787"
     restart: unless-stopped
