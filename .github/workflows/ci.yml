@@ -35,6 +35,9 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
+      - name: Create placeholder dirs for rust-embed
+        run: mkdir -p sdk/dist sdk/pkg
+
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
