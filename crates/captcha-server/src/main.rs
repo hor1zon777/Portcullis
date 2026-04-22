@@ -39,16 +39,32 @@ async fn main() {
 
     let prom_handle = app_metrics::install();
 
-    let cfg = config::Config::load(&cli);
+    let mut cfg = config::Config::load(&cli);
     let bind = cfg.bind.clone();
-    let site_count = cfg.sites.len();
     let config_path = cfg.config_path.clone();
 
-    let app_state = AppState::new(cfg);
+    // 初始化 SQLite
+    let db = captcha_server::db::open(&cfg.db_path);
+    captcha_server::db::migrate(&db);
 
-    // 后台任务：store 清理 + risk 清理 + 指标采集 + 配置热重载
+    // Seed TOML 数据到 DB（仅首次 INSERT OR IGNORE）
+    captcha_server::db::seed_sites(&db, &cfg.sites);
+    captcha_server::db::seed_ip_lists(&db, &cfg.risk.blocked_ips, &cfg.risk.allowed_ips);
+
+    // 从 DB 加载（DB 为 source of truth）
+    cfg.sites = captcha_server::db::load_sites(&db);
+    cfg.risk.blocked_ips = captcha_server::db::load_ip_list(&db, "blocked");
+    cfg.risk.allowed_ips = captcha_server::db::load_ip_list(&db, "allowed");
+
+    let site_count = cfg.sites.len();
+    tracing::info!("SQLite 已初始化：{}", cfg.db_path.display());
+
+    let app_state = AppState::new(cfg, db.clone());
+
+    // 后台任务：store 清理 + risk 清理 + 指标采集 + DB 清理 + 配置热重载
     let bg_state = app_state.clone();
     let bg_config_path = config_path.clone();
+    let bg_db = db.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(30));
         let mut last_mtime: Option<std::time::SystemTime> = None;
@@ -58,6 +74,16 @@ async fn main() {
             // store 清理
             bg_state.store.cleanup_expired();
             app_metrics::register_store_metrics(&bg_state.store);
+
+            // DB 清理（过期日志 + 过期 nonce）
+            {
+                let db = bg_db.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    captcha_server::db::cleanup_old_logs(&db, 7);
+                    captcha_server::db::cleanup_expired_nonces(&db);
+                })
+                .await;
+            }
 
             // risk tracker 清理
             {

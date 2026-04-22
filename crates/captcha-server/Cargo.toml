@@ -23,6 +23,7 @@ dashmap = "6"
 subtle = "2"
 sha2 = "0.10"
 rust-embed = { version = "8", features = ["mime-guess", "interpolate-folder-path"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
 arc-swap = "1"
 ipnet = "2"
 

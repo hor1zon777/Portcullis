@@ -84,6 +84,7 @@ pub struct Config {
     pub challenge_ttl_secs: u64,
     pub risk: RiskConfig,
     pub admin_token: Option<String>,
+    pub db_path: PathBuf,
     pub config_path: Option<PathBuf>,
 }
 
@@ -166,6 +167,10 @@ impl Config {
                 .and_then(|a| a.token.clone())
         });
 
+        let db_path = std::env::var("CAPTCHA_DB_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("captcha.db"));
+
         Self {
             secret: secret.into_bytes(),
             bind,
@@ -174,6 +179,7 @@ impl Config {
             challenge_ttl_secs,
             risk: toml_risk.unwrap_or_default(),
             admin_token,
+            db_path,
             config_path,
         }
     }

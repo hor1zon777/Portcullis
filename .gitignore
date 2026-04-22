@@ -6,3 +6,6 @@
 /admin-ui/dist
 *.wasm
 captcha.toml
+captcha.db
+captcha.db-wal
+captcha.db-shm

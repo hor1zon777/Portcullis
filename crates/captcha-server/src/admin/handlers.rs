@@ -96,14 +96,13 @@ pub async fn create_site(
     }
 
     let secret_key = gen_secret_key();
-    config.sites.insert(
-        req.key.clone(),
-        crate::config::SiteConfig {
-            secret_key: secret_key.clone(),
-            diff: req.diff,
-            origins: req.origins,
-        },
-    );
+    let new_site = crate::config::SiteConfig {
+        secret_key: secret_key.clone(),
+        diff: req.diff,
+        origins: req.origins,
+    };
+    crate::db::insert_site(&state.db, &req.key, &new_site);
+    config.sites.insert(req.key.clone(), new_site);
     state.reload_config(config).await;
     (
         StatusCode::CREATED,
@@ -123,6 +122,7 @@ pub async fn delete_site(State(state): State<AppState>, Path(key): Path<String>)
         )
             .into_response();
     }
+    crate::db::delete_site(&state.db, &key);
     state.reload_config(config).await;
     Json(serde_json::json!({"ok": true})).into_response()
 }
@@ -152,9 +152,10 @@ pub async fn update_site(
     if let Some(d) = req.diff {
         site.diff = d;
     }
-    if let Some(o) = req.origins {
-        site.origins = o;
+    if let Some(ref o) = req.origins {
+        site.origins = o.clone();
     }
+    crate::db::update_site_fields(&state.db, &key, req.diff, req.origins.as_deref());
     state.reload_config(config).await;
     Json(serde_json::json!({"ok": true})).into_response()
 }
@@ -162,7 +163,11 @@ pub async fn update_site(
 // ──────── GET /admin/api/logs ────────
 
 pub async fn logs(State(state): State<AppState>) -> Json<Vec<super::request_log::LogEntry>> {
-    Json(state.request_log.recent(200))
+    let db = state.db.clone();
+    let result = tokio::task::spawn_blocking(move || crate::db::load_recent_logs(&db, 200))
+        .await
+        .unwrap_or_default();
+    Json(result)
 }
 
 // ──────── GET /admin/api/risk/ips ────────
@@ -189,6 +194,7 @@ pub struct BlockRequest {
 pub async fn block_ip(State(state): State<AppState>, Json(req): Json<BlockRequest>) -> Response {
     let mut risk = state.risk.write().await;
     if risk.add_blocked(&req.ip) {
+        crate::db::insert_ip_list(&state.db, &req.ip, "blocked");
         tracing::info!(ip = %req.ip, "管理员封禁 IP");
         Json(serde_json::json!({"ok": true})).into_response()
     } else {
@@ -205,6 +211,7 @@ pub async fn block_ip(State(state): State<AppState>, Json(req): Json<BlockReques
 pub async fn unblock_ip(State(state): State<AppState>, Json(req): Json<BlockRequest>) -> Response {
     let mut risk = state.risk.write().await;
     if risk.remove_blocked(&req.ip) {
+        crate::db::delete_ip_list(&state.db, &req.ip, "blocked");
         tracing::info!(ip = %req.ip, "管理员解封 IP");
         Json(serde_json::json!({"ok": true})).into_response()
     } else {

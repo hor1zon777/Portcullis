@@ -5,6 +5,7 @@ use tokio::sync::RwLock;
 
 use crate::admin::request_log::RequestLog;
 use crate::config::Config;
+use crate::db::Db;
 use crate::risk::RiskTracker;
 use crate::store::memory::MemoryStore;
 
@@ -14,16 +15,19 @@ pub struct AppState {
     pub store: Arc<MemoryStore>,
     pub risk: Arc<RwLock<RiskTracker>>,
     pub request_log: Arc<RequestLog>,
+    pub db: Db,
 }
 
 impl AppState {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, db: Db) -> Self {
+        crate::db::migrate(&db);
         let risk_cfg = config.risk.clone();
         Self {
             config: Arc::new(ArcSwap::from_pointee(config)),
             store: Arc::new(MemoryStore::new()),
             risk: Arc::new(RwLock::new(RiskTracker::new(risk_cfg))),
             request_log: Arc::new(RequestLog::new()),
+            db,
         }
     }
 

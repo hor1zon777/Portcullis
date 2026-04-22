@@ -42,8 +42,8 @@ pub async fn verify(
     let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
     crate::metrics::record_verify(&site_key, success, started);
 
-    // 写入请求日志
-    state.request_log.push(crate::admin::request_log::LogEntry {
+    // 写入请求日志（内存 + DB）
+    let log_entry = crate::admin::request_log::LogEntry {
         timestamp: crate::admin::request_log::now_ms(),
         ip: client_ip,
         site_key: site_key.clone(),
@@ -55,7 +55,10 @@ pub async fn verify(
         } else {
             Some("verify failed".to_string())
         },
-    });
+    };
+    state.request_log.push(log_entry.clone());
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || crate::db::insert_log(&db, &log_entry));
 
     // 记录风控数据
     if let Some(ip) = client_ip {
