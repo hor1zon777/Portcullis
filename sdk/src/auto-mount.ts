@@ -74,6 +74,9 @@ function mountElement(el: HTMLElement): MountedWidget | null {
   const lang = (el.dataset.lang as CaptchaOptions['lang']) || 'zh-CN';
   const callbackName = el.dataset.callback;
   const targetId = el.dataset.target;
+  const maxIters = el.dataset.diff
+    ? Math.pow(2, Number(el.dataset.diff) + 2)
+    : undefined;
 
   const id = `powc-${++idCounter}`;
   el.dataset.powMounted = id;
@@ -84,6 +87,7 @@ function mountElement(el: HTMLElement): MountedWidget | null {
     wasmBase,
     theme,
     lang,
+    ...(maxIters !== undefined && { maxIters }),
     onSuccess(token: string) {
       if (targetId) {
         const input = document.getElementById(targetId) as HTMLInputElement;

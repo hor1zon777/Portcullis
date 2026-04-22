@@ -8,6 +8,7 @@ export const WIDGET_CSS = `
     'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 14px;
   width: 300px;
+  max-width: 100%;
   padding: 12px 14px;
   box-sizing: border-box;
   border: 1px solid var(--powc-border, #d0d7de);
@@ -98,6 +99,21 @@ export const WIDGET_CSS = `
 }
 @keyframes powc-spin {
   to { transform: rotate(360deg); }
+}
+.powc-widget.powc-unsupported {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.powc-widget.powc-unsupported .powc-check {
+  border-color: #8c959f;
+}
+@media (max-width: 340px) {
+  .powc-widget {
+    padding: 10px;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .powc-brand { display: none; }
 }
 `;
 

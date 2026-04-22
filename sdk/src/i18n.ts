@@ -1,5 +1,3 @@
-/** Widget 文案字典 */
-
 type Lang = 'zh-CN' | 'en-US';
 
 interface Strings {
@@ -9,6 +7,8 @@ interface Strings {
   failed: string;
   expired: string;
   powered_by: string;
+  unsupported: string;
+  aria_widget_label: string;
 }
 
 const dict: Record<Lang, Strings> = {
@@ -19,6 +19,8 @@ const dict: Record<Lang, Strings> = {
     failed: '验证失败，请重试',
     expired: '已过期，请重新验证',
     powered_by: 'PoW 验证',
+    unsupported: '浏览器不兼容',
+    aria_widget_label: 'PoW 验证码，点击验证',
   },
   'en-US': {
     click_to_verify: "I'm not a robot",
@@ -27,6 +29,8 @@ const dict: Record<Lang, Strings> = {
     failed: 'Failed, please retry',
     expired: 'Expired, please retry',
     powered_by: 'PoW CAPTCHA',
+    unsupported: 'Browser not supported',
+    aria_widget_label: 'PoW CAPTCHA, click to verify',
   },
 };
 
