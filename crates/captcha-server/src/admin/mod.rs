@@ -33,10 +33,7 @@ pub fn admin_router(state: AppState, token: String) -> Router {
 
     // /admin 页面由 admin-ui 容器（Nginx）提供；
     // 单二进制部署时重定向到提示页
-    let fallback = Router::new().route(
-        "/admin",
-        get(|| async { Redirect::temporary("/admin/") }),
-    );
+    let fallback = Router::new().route("/admin", get(|| async { Redirect::temporary("/admin/") }));
 
     fallback.merge(api)
 }

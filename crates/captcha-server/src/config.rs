@@ -159,14 +159,12 @@ impl Config {
             .or_else(|| ts.and_then(|s| s.token_ttl_secs))
             .unwrap_or(300);
 
-        let admin_token = std::env::var("CAPTCHA_ADMIN_TOKEN")
-            .ok()
-            .or_else(|| {
-                toml_admin
-                    .as_ref()
-                    .filter(|a| a.enabled.unwrap_or(true))
-                    .and_then(|a| a.token.clone())
-            });
+        let admin_token = std::env::var("CAPTCHA_ADMIN_TOKEN").ok().or_else(|| {
+            toml_admin
+                .as_ref()
+                .filter(|a| a.enabled.unwrap_or(true))
+                .and_then(|a| a.token.clone())
+        });
 
         Self {
             secret: secret.into_bytes(),

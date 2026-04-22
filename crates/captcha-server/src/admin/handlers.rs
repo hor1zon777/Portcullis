@@ -103,10 +103,7 @@ pub async fn create_site(
 
 // ──────── DELETE /admin/api/sites/:key ────────
 
-pub async fn delete_site(
-    State(state): State<AppState>,
-    Path(key): Path<String>,
-) -> Response {
+pub async fn delete_site(State(state): State<AppState>, Path(key): Path<String>) -> Response {
     let mut config = (*state.config.load_full()).clone();
     if config.sites.remove(&key).is_none() {
         return (
@@ -194,10 +191,7 @@ pub async fn block_ip(State(state): State<AppState>, Json(req): Json<BlockReques
 
 // ──────── DELETE /admin/api/risk/block ────────
 
-pub async fn unblock_ip(
-    State(state): State<AppState>,
-    Json(req): Json<BlockRequest>,
-) -> Response {
+pub async fn unblock_ip(State(state): State<AppState>, Json(req): Json<BlockRequest>) -> Response {
     let mut risk = state.risk.write().await;
     if risk.remove_blocked(&req.ip) {
         tracing::info!(ip = %req.ip, "管理员解封 IP");
