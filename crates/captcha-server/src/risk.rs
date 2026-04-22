@@ -135,6 +135,85 @@ impl RiskTracker {
         self.allowed_nets = parse_nets(&config.allowed_ips);
         self.config = config;
     }
+
+    /// 遍历所有被追踪的 IP，返回风控摘要。
+    pub fn ip_summary(&self) -> Vec<IpRiskSummary> {
+        self.records
+            .iter()
+            .map(|entry| {
+                let ip = *entry.key();
+                let rec = entry.value();
+                let total = rec.outcomes.len();
+                let fails = rec.outcomes.iter().filter(|(_, ok)| !ok).count();
+                let fail_rate = if total > 0 {
+                    fails as f64 / total as f64
+                } else {
+                    0.0
+                };
+                IpRiskSummary {
+                    ip,
+                    total,
+                    fails,
+                    fail_rate,
+                    extra_diff: self.extra_diff(ip),
+                    is_blocked: self.is_blocked(ip),
+                    is_allowed: self.is_allowed(ip),
+                }
+            })
+            .collect()
+    }
+
+    /// 运行时添加黑名单条目。
+    pub fn add_blocked(&mut self, ip_or_cidr: &str) -> bool {
+        if let Some(net) = parse_one_net(ip_or_cidr) {
+            if !self.blocked_nets.contains(&net) {
+                self.blocked_nets.push(net);
+                self.config.blocked_ips.push(ip_or_cidr.to_string());
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 运行时移除黑名单条目。
+    pub fn remove_blocked(&mut self, ip_or_cidr: &str) -> bool {
+        if let Some(net) = parse_one_net(ip_or_cidr) {
+            let before = self.blocked_nets.len();
+            self.blocked_nets.retain(|n| n != &net);
+            self.config
+                .blocked_ips
+                .retain(|s| parse_one_net(s) != Some(net));
+            return self.blocked_nets.len() < before;
+        }
+        false
+    }
+
+    /// 返回当前黑名单列表。
+    pub fn blocked_list(&self) -> Vec<String> {
+        self.config.blocked_ips.clone()
+    }
+
+    /// 返回当前白名单列表。
+    pub fn allowed_list(&self) -> Vec<String> {
+        self.config.allowed_ips.clone()
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IpRiskSummary {
+    pub ip: IpAddr,
+    pub total: usize,
+    pub fails: usize,
+    pub fail_rate: f64,
+    pub extra_diff: u8,
+    pub is_blocked: bool,
+    pub is_allowed: bool,
+}
+
+fn parse_one_net(s: &str) -> Option<IpNet> {
+    s.parse::<IpNet>()
+        .or_else(|_| s.parse::<IpAddr>().map(IpNet::from))
+        .ok()
 }
 
 fn parse_nets(strs: &[String]) -> Vec<IpNet> {

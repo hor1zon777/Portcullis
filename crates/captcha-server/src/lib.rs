@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod config;
 pub mod error;
 pub mod metrics;
@@ -53,7 +54,13 @@ pub fn build_router(
         .route("/api/v1/siteverify", post(routes::siteverify::site_verify))
         .route("/sdk/*file", get(static_assets::serve_sdk))
         .route("/healthz", get(|| async { "ok" }))
-        .with_state(app_state);
+        .with_state(app_state.clone());
+
+    // Admin 面板（需要 admin_token 才注册）
+    if let Some(token) = &config.admin_token {
+        router = router.merge(admin::admin_router(app_state, token.clone()));
+        tracing::info!("管理面板已启用：/admin");
+    }
 
     if let Some(handle) = prom_handle {
         router = router.merge(

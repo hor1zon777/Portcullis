@@ -38,6 +38,14 @@ struct TomlConfig {
     sites: Vec<SiteSection>,
     #[serde(default)]
     risk: Option<RiskConfig>,
+    #[serde(default)]
+    admin: Option<AdminSection>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminSection {
+    enabled: Option<bool>,
+    token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,7 +67,7 @@ struct SiteSection {
 
 // ───────────── 运行时配置 ─────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct SiteConfig {
     pub secret_key: String,
     pub diff: u8,
@@ -75,7 +83,7 @@ pub struct Config {
     pub token_ttl_secs: u64,
     pub challenge_ttl_secs: u64,
     pub risk: RiskConfig,
-    /// 加载时使用的配置文件路径（热重载用）
+    pub admin_token: Option<String>,
     pub config_path: Option<PathBuf>,
 }
 
@@ -83,9 +91,9 @@ impl Config {
     pub fn load(cli: &Cli) -> Self {
         let (toml_cfg, config_path) = load_toml(cli.config.as_ref());
 
-        let (toml_server, toml_sites, toml_risk) = match toml_cfg {
-            Some(t) => (t.server, t.sites, t.risk),
-            None => (None, Vec::new(), None),
+        let (toml_server, toml_sites, toml_risk, toml_admin) = match toml_cfg {
+            Some(t) => (t.server, t.sites, t.risk, t.admin),
+            None => (None, Vec::new(), None, None),
         };
 
         let ts = toml_server.as_ref();
@@ -151,6 +159,15 @@ impl Config {
             .or_else(|| ts.and_then(|s| s.token_ttl_secs))
             .unwrap_or(300);
 
+        let admin_token = std::env::var("CAPTCHA_ADMIN_TOKEN")
+            .ok()
+            .or_else(|| {
+                toml_admin
+                    .as_ref()
+                    .filter(|a| a.enabled.unwrap_or(true))
+                    .and_then(|a| a.token.clone())
+            });
+
         Self {
             secret: secret.into_bytes(),
             bind,
@@ -158,6 +175,7 @@ impl Config {
             token_ttl_secs,
             challenge_ttl_secs,
             risk: toml_risk.unwrap_or_default(),
+            admin_token,
             config_path,
         }
     }

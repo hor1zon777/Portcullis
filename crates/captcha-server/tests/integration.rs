@@ -32,6 +32,7 @@ fn test_config() -> Config {
         token_ttl_secs: 300,
         challenge_ttl_secs: 120,
         risk: Default::default(),
+        admin_token: None,
         config_path: None,
     }
 }

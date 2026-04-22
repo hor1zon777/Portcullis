@@ -33,12 +33,29 @@ pub async fn verify(
 ) -> Result<Json<VerifyResponse>, AppError> {
     let started = std::time::Instant::now();
     let site_key = req.challenge.site_key.clone();
+    let nonce = req.nonce;
     let client_ip = extract_ip(&headers, None);
 
     let result = do_verify(&state, &headers, req).await;
 
     let success = result.is_ok();
+    let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
     crate::metrics::record_verify(&site_key, success, started);
+
+    // 写入请求日志
+    state.request_log.push(crate::admin::request_log::LogEntry {
+        timestamp: crate::admin::request_log::now_ms(),
+        ip: client_ip,
+        site_key: site_key.clone(),
+        nonce,
+        success,
+        duration_ms,
+        error: if success {
+            None
+        } else {
+            Some("verify failed".to_string())
+        },
+    });
 
     // 记录风控数据
     if let Some(ip) = client_ip {

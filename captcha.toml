@@ -26,3 +26,7 @@ window_size = 20
 fail_rate_threshold = 0.7
 blocked_ips = []
 allowed_ips = ["127.0.0.1"]
+
+[admin]
+enabled = true
+token = "admin_test_token_change_me"
