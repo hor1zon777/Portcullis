@@ -1,0 +1,35 @@
+# PoW CAPTCHA 配置文件
+
+[server]
+bind = "0.0.0.0:8787"
+# 密钥至少 32 字节，运行 `captcha-server gen-secret` 生成
+secret = "3885b10c032583356d27b6a3cae5f248eba0471254e838f9d82fd66b117e6c04"
+challenge_ttl_secs = 120
+token_ttl_secs = 300
+
+[[sites]]
+key = "pk_example"
+secret_key = "898102810d6d46be5ef2cf7bba40759262df960fe3970b658fe6ff09497dac08"
+diff = 18
+origins = ["https://example.com"]
+
+# 可添加多个站点
+# [[sites]]
+# key = "pk_mobile"
+# secret_key = "sk_mobile_change_me_min16"
+# diff = 14
+# origins = ["https://m.example.com"]
+
+[risk]
+# 启用后，连续验证失败的 IP 会被自动提高难度
+dynamic_diff_enabled = true
+# 最大额外 diff 增量
+dynamic_diff_max_increase = 4
+# 滑动窗口大小（最近 N 次请求）
+window_size = 20
+# 触发阈值（失败率 >= 此值开始加难度）
+fail_rate_threshold = 0.7
+# 黑名单（CIDR 或单 IP，直接拒绝）
+blocked_ips = []
+# 白名单（CIDR 或单 IP，跳过难度调整和限流）
+allowed_ips = ["127.0.0.1"]
