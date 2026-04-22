@@ -119,8 +119,13 @@ impl Config {
             .unwrap_or_else(|| "0.0.0.0:8787".to_string());
 
         let sites = if let Ok(sites_json) = std::env::var("CAPTCHA_SITES") {
-            serde_json::from_str::<HashMap<String, SiteConfig>>(&sites_json)
-                .expect("CAPTCHA_SITES 格式错误")
+            match serde_json::from_str::<HashMap<String, SiteConfig>>(&sites_json) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("CAPTCHA_SITES 解析失败（站点将从 DB 加载）: {e}");
+                    HashMap::new()
+                }
+            }
         } else {
             let mut map = HashMap::new();
             for site in toml_sites {
