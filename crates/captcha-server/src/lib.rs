@@ -2,6 +2,7 @@ pub mod config;
 pub mod error;
 pub mod metrics;
 pub mod rate_limit;
+pub mod risk;
 pub mod routes;
 pub mod state;
 pub mod static_assets;
@@ -21,18 +22,15 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use crate::rate_limit::{rate_limit_middleware, IpRateLimiter};
 use crate::state::AppState;
 
-const BODY_LIMIT: usize = 64 * 1024;
+const BODY_LIMIT: usize = 256 * 1024; // 256 KiB（batch verify 可能较大）
 
-/// 构建完整路由。
-/// - `limiter`: 注入 IP 限流器（测试时传 None 跳过）
-/// - `prom_handle`: 注入 Prometheus handle 以启用 /metrics 端点
 pub fn build_router(
     app_state: AppState,
     limiter: Option<IpRateLimiter>,
     prom_handle: Option<PrometheusHandle>,
 ) -> Router {
-    let allowed_origins: Vec<HeaderValue> = app_state
-        .config
+    let config = app_state.config.load();
+    let allowed_origins: Vec<HeaderValue> = config
         .sites
         .values()
         .flat_map(|s| &s.origins)
@@ -51,12 +49,12 @@ pub fn build_router(
     let mut router = Router::new()
         .route("/api/v1/challenge", post(routes::challenge::create))
         .route("/api/v1/verify", post(routes::verify::verify))
+        .route("/api/v1/verify/batch", post(routes::verify::verify_batch))
         .route("/api/v1/siteverify", post(routes::siteverify::site_verify))
         .route("/sdk/*file", get(static_assets::serve_sdk))
         .route("/healthz", get(|| async { "ok" }))
-        .with_state(app_state.clone());
+        .with_state(app_state);
 
-    // /metrics 端点使用独立的 state（PrometheusHandle）
     if let Some(handle) = prom_handle {
         router = router.merge(
             Router::new()
@@ -66,8 +64,8 @@ pub fn build_router(
     }
 
     if let Some(lim) = limiter {
-        router = router
-            .route_layer(middleware::from_fn_with_state(lim, rate_limit_middleware));
+        router =
+            router.route_layer(middleware::from_fn_with_state(lim, rate_limit_middleware));
     }
 
     router

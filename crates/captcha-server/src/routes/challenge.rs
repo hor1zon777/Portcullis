@@ -6,9 +6,9 @@ use captcha_core::{challenge::Challenge, crypto};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
+use crate::rate_limit::extract_ip;
 use crate::state::AppState;
 
-/// site_key 最大长度（字节），防止恶意超长输入
 const MAX_SITE_KEY_LEN: usize = 64;
 
 #[derive(Debug, Deserialize)]
@@ -23,10 +23,6 @@ pub struct ChallengeResponse {
     pub sig: String,
 }
 
-/// 校验 Origin header 与该站点配置的白名单是否匹配。
-/// - 若 Origin header 不存在（服务端到服务端调用）：放行
-/// - 若 site.origins 为空（未配置白名单）：放行
-/// - 否则必须精确匹配
 pub(crate) fn check_origin(
     headers: &HeaderMap,
     origins: &[String],
@@ -40,7 +36,7 @@ pub(crate) fn check_origin(
     if origins.iter().any(|o| o == origin_value) {
         Ok(())
     } else {
-        tracing::warn!(origin = %origin_value, "Origin 不在白名单内，拒绝请求");
+        tracing::warn!(origin = %origin_value, "Origin 不在白名单内");
         Err(AppError::Unauthorized(format!(
             "Origin '{}' 不在白名单",
             origin_value
@@ -61,12 +57,30 @@ pub async fn create(
         )));
     }
 
-    let site = state
-        .config
+    let config = state.config.load();
+    let site = config
         .get_site(&req.site_key)
         .ok_or_else(|| AppError::BadRequest(format!("未知的 site_key: {}", req.site_key)))?;
 
     check_origin(&headers, &site.origins)?;
+
+    // IP 黑名单检查
+    let client_ip = extract_ip(&headers, None);
+    if let Some(ip) = client_ip {
+        let risk = state.risk.read().await;
+        if risk.is_blocked(ip) {
+            return Err(AppError::Unauthorized("IP 已被封禁".to_string()));
+        }
+    }
+
+    // 动态难度
+    let extra_diff = if let Some(ip) = client_ip {
+        let risk = state.risk.read().await;
+        risk.extra_diff(ip)
+    } else {
+        0
+    };
+    let effective_diff = site.diff.saturating_add(extra_diff);
 
     let mut salt = [0u8; 16];
     getrandom::getrandom(&mut salt)
@@ -80,21 +94,24 @@ pub async fn create(
     let challenge = Challenge {
         id: uuid::Uuid::new_v4().to_string(),
         salt,
-        diff: site.diff,
-        exp: now_ms + state.config.challenge_ttl_secs * 1000,
+        diff: effective_diff,
+        exp: now_ms + config.challenge_ttl_secs * 1000,
         site_key: req.site_key,
     };
 
-    let sig_bytes = crypto::sign(&challenge.to_sign_bytes(), &state.config.secret);
+    let sig_bytes = crypto::sign(&challenge.to_sign_bytes(), &config.secret);
 
     crate::metrics::record_challenge_issued(&challenge.site_key);
 
-    tracing::debug!(
-        challenge_id = %challenge.id,
-        site_key = %challenge.site_key,
-        diff = challenge.diff,
-        "发放挑战"
-    );
+    if extra_diff > 0 {
+        tracing::info!(
+            challenge_id = %challenge.id,
+            base_diff = site.diff,
+            extra_diff,
+            effective_diff,
+            "动态难度提升"
+        );
+    }
 
     Ok(Json(ChallengeResponse {
         success: true,

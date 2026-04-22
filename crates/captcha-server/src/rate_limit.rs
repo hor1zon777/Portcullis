@@ -46,7 +46,7 @@ impl IpRateLimiter {
 }
 
 /// 提取客户端 IP：优先 X-Forwarded-For 第一段，回落到 ConnectInfo。
-fn extract_ip(headers: &HeaderMap, conn: Option<&SocketAddr>) -> Option<IpAddr> {
+pub fn extract_ip(headers: &HeaderMap, conn: Option<&SocketAddr>) -> Option<IpAddr> {
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         if let Some(first) = xff.split(',').next() {
             if let Ok(ip) = first.trim().parse() {

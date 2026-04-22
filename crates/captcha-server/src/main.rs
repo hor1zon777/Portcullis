@@ -28,7 +28,6 @@ async fn main() {
         }
     }
 
-    // 非阻塞日志 writer：避免高 QPS 下阻塞 tokio runtime
     let (non_blocking, _guard) = tracing_appender::non_blocking(std::io::stdout());
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -38,23 +37,56 @@ async fn main() {
         .with_writer(non_blocking)
         .init();
 
-    // 安装 Prometheus exporter
     let prom_handle = app_metrics::install();
 
     let cfg = config::Config::load(&cli);
     let bind = cfg.bind.clone();
     let site_count = cfg.sites.len();
+    let config_path = cfg.config_path.clone();
 
     let app_state = AppState::new(cfg);
 
-    // 后台清理 + 定期 gauge 更新
-    let store = app_state.store.clone();
+    // 后台任务：store 清理 + risk 清理 + 指标采集 + 配置热重载
+    let bg_state = app_state.clone();
+    let bg_config_path = config_path.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(30));
+        let mut last_mtime: Option<std::time::SystemTime> = None;
         loop {
             ticker.tick().await;
-            store.cleanup_expired();
-            app_metrics::register_store_metrics(&store);
+
+            // store 清理
+            bg_state.store.cleanup_expired();
+            app_metrics::register_store_metrics(&bg_state.store);
+
+            // risk tracker 清理
+            {
+                let risk = bg_state.risk.read().await;
+                let removed = risk.cleanup_stale();
+                if removed > 0 {
+                    tracing::debug!("清理 {} 条过期 IP 记录", removed);
+                }
+            }
+
+            // 配置热重载：检查 mtime
+            if let Some(ref path) = bg_config_path {
+                if let Ok(meta) = std::fs::metadata(path) {
+                    if let Ok(mtime) = meta.modified() {
+                        let changed = last_mtime.map(|prev| mtime != prev).unwrap_or(false);
+                        last_mtime = Some(mtime);
+                        if changed {
+                            tracing::info!("检测到配置文件变更，开始热重载...");
+                            let new_cli = Cli {
+                                config: Some(path.clone()),
+                                bind: None,
+                                command: None,
+                            };
+                            let new_cfg = config::Config::load(&new_cli);
+                            bg_state.reload_config(new_cfg).await;
+                        }
+                    }
+                }
+            }
         }
     });
 
@@ -63,9 +95,10 @@ async fn main() {
 
     let addr: SocketAddr = bind.parse().expect("bind 地址格式错误");
     tracing::info!(
-        "PoW 验证码服务启动：http://{} （{} 站点；/metrics 已启用）",
+        "PoW 验证码服务启动：http://{} （{} 站点 | /metrics | 配置热重载{}）",
         addr,
-        site_count
+        site_count,
+        if config_path.is_some() { "已启用" } else { "未启用（无配置文件）" }
     );
 
     let listener = tokio::net::TcpListener::bind(addr)

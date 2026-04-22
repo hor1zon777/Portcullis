@@ -31,6 +31,8 @@ fn test_config() -> Config {
         sites,
         token_ttl_secs: 300,
         challenge_ttl_secs: 120,
+        risk: Default::default(),
+        config_path: None,
     }
 }
 
