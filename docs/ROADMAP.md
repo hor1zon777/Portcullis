@@ -44,7 +44,7 @@
 | 5 | **`auto-mount.ts` 补全 `data-diff`** | 文档声明了但未读取，实现覆盖 `maxIters` 的逻辑 |
 | 6 | **多 endpoint 场景** | `wasmCache` 按 `wasmBase` 分 key，避免多实例串 WASM |
 | 7 | **`destroy()` 清理 setTimeout** | 存储 timeout ID 并在销毁时 clearTimeout |
-| 8 | **npm 正式发布** | 补全 `exports` map + README + `publishConfig`，发到 npmjs |
+| ~~8~~ | ~~npm 正式发布~~ | 已取消，SDK 仅通过服务端内嵌分发 |
 
 ---
 
@@ -86,7 +86,7 @@
 | 5 | **API 稳定性承诺** | 冻结 `/api/v1/*` 请求/响应格式，后续变更走 `/api/v2/*` |
 | 6 | **CHANGELOG** | 所有版本变更记录 |
 | 7 | **UPGRADING 文档** | 算法参数变更的蓝绿/灰度发布指南 |
-| 8 | **React / Vue 组件包** | 框架封装包，发到 npm |
+| ~~8~~ | ~~React / Vue 组件包~~ | 已取消，SDK 通过 `<script>` 标签 + `window.PowCaptcha` 全局 API 覆盖所有框架 |
 
 ---
 

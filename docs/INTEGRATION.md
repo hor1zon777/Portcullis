@@ -93,10 +93,11 @@ curl http://localhost:8787/healthz
 | `data-endpoint` | `<script>` | 覆盖 endpoint（通常自动推导） |
 | `data-wasm-base` | `<script>` | 覆盖 WASM 路径 |
 
-### 方式 B：ES 模块
+### 方式 B：ES 模块（本地开发 / 自行构建）
 
 ```ts
-import { render } from 'pow-captcha-sdk';
+// 从 sdk/src 直接导入（需 Vite / webpack 等构建工具）
+import { render } from './sdk/src/index';
 
 const widget = render('#captcha', {
   siteKey: 'pk_test',
