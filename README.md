@@ -1,107 +1,136 @@
 # PoW CAPTCHA
 
-基于工作量证明（Proof of Work）的验证码服务。Argon2id 内存硬化 + SHA-256 快速迭代，单二进制部署，一行 `<script>` 接入。
+基于工作量证明的验证码服务。用算力替代图像识别，用户点一下即完成验证。
 
-## 一分钟接入
+**Argon2id 内存硬化 + SHA-256 快速迭代 | 单二进制 | 一行 `<script>` 接入 | 零第三方依赖**
 
-### 1. 部署服务
+---
+
+## 为什么选 PoW CAPTCHA
+
+| | 传统图像验证码 | PoW CAPTCHA |
+|---|---|---|
+| 用户体验 | 选图/拼图/滑块，耗时 5-15s | 点击后等 1-2s，全自动 |
+| 隐私 | 发请求到 Google/hCaptcha | 自托管，零外部请求，零追踪 |
+| GPU 攻击者成本 | 图像识别已被打码平台攻破 | 每次尝试需 4 MiB 内存，GPU 并发受限 |
+| 部署 | 依赖第三方 API + 密钥 | 单二进制，内嵌 SDK，5 分钟部署 |
+| 合规 | 向第三方传输用户数据 | 无 Cookie，无指纹，符合 GDPR/CCPA |
+
+---
+
+## 30 秒快速开始
+
+### 1. 启动服务
 
 ```bash
-# Docker（推荐）
+# 方式 A：单二进制
+./captcha-server gen-config > captcha.toml
+./captcha-server gen-secret  # 将输出填入 captcha.toml 的 secret 字段
+./captcha-server --config captcha.toml
+
+# 方式 B：Docker
 docker run -d -p 8787:8787 \
   -v $(pwd)/captcha.toml:/etc/captcha/captcha.toml:ro \
   pow-captcha:latest
-
-# 或直接运行二进制
-./captcha-server gen-config > captcha.toml   # 生成配置模板
-./captcha-server gen-secret                   # 生成密钥
-# 编辑 captcha.toml 填入密钥和站点配置
-./captcha-server --config captcha.toml
 ```
 
 ### 2. 前端接入（零 JS 代码）
 
 ```html
-<script src="https://captcha.example.com/sdk/pow-captcha.js"
+<script src="https://your-captcha-server.com/sdk/pow-captcha.js"
         data-site-key="pk_test"></script>
 
-<form>
+<form action="/login" method="POST">
+  <input name="username" />
+  <input name="password" type="password" />
   <div data-pow-captcha data-target="captcha_token"></div>
   <input type="hidden" name="captcha_token" id="captcha_token" />
-  <button type="submit">提交</button>
+  <button type="submit">登录</button>
 </form>
 ```
 
-widget 自动渲染，验证通过后自动填充 `#captcha_token`。
+SDK 自动渲染 widget → 用户点击 → 后台挖矿 → 通过后自动填充 hidden input。
 
-### 3. 后端校验
+### 3. 后端校验（任选一种语言）
 
 ```bash
-curl -X POST https://captcha.example.com/api/v1/siteverify \
+curl -X POST https://your-captcha-server.com/api/v1/siteverify \
   -H 'content-type: application/json' \
-  -d '{"token":"<captcha_token>","secret_key":"sk_test_secret"}'
-# → {"success": true, "challenge_id": "…", "site_key": "pk_test"}
+  -d '{"token":"<captcha_token>","secret_key":"sk_your_secret"}'
 ```
 
-7 种语言的后端接入代码片段：[docs/snippets/](docs/snippets/README.md)
+```json
+{"success": true, "challenge_id": "...", "site_key": "pk_test"}
+```
+
+> 7 种语言的完整代码片段：[Node](docs/snippets/nodejs.md) · [Python](docs/snippets/python.md) · [Go](docs/snippets/go.md) · [PHP](docs/snippets/php.md) · [Java](docs/snippets/java.md) · [C#](docs/snippets/csharp.md) · [Ruby](docs/snippets/ruby.md)
 
 ---
 
 ## 工作原理
 
 ```
-浏览器                                    验证服务
-  │  ① 请求挑战 ──────────────────────►  │  发放 challenge + HMAC 签名
-  │  ② 本地挖矿：                        │
-  │     Argon2id(challenge) → base_hash  │  （一次性，~100ms）
-  │     SHA-256(base ‖ nonce) 循环迭代    │  （~1-2 秒找到解）
-  │  ③ 提交 nonce ────────────────────►  │  单次 Argon2+SHA-256 验证，发放 token
-  │  ④ token 随表单提交到业务后端 ──►     │
-  │                       业务后端 ──────►│  ⑤ /siteverify 核验 token
+浏览器                                     验证服务                     业务后端
+  │                                          │                            │
+  │  ① POST /challenge {site_key}            │                            │
+  ├─────────────────────────────────────────►│                            │
+  │  ◄── {challenge, sig}                    │                            │
+  │                                          │                            │
+  │  ② 本地挖矿（Web Worker-free）           │                            │
+  │     Argon2id(id, salt) → base_hash       │  一次性 ~5ms               │
+  │     SHA-256(base ‖ nonce) × N            │  迭代 ~1-2s                │
+  │                                          │                            │
+  │  ③ POST /verify {challenge, sig, nonce}  │                            │
+  ├─────────────────────────────────────────►│                            │
+  │  ◄── {captcha_token}                     │  验证仅需 1 次 Argon2+SHA  │
+  │                                          │                            │
+  │  ④ 表单提交携带 captcha_token ──────────────────────────────────────►│
+  │                                          │  ⑤ POST /siteverify        │
+  │                                          │◄────────────────────────────┤
+  │                                          │──── {success: true} ──────►│
 ```
 
-- **Argon2id（4 MiB）** 保证每个 challenge 的内存硬化成本，对抗 GPU 农场
-- **SHA-256 快速迭代** 保证 1-2 秒内完成，UI 不阻塞（chunked 主线程执行）
-- **HMAC-SHA256 签名** 保证 challenge 不可伪造，服务端无状态发放
+## 特性一览
 
-## 部署方式
+### 安全
+- Argon2id 内存硬化（4 MiB/次），GPU 单卡并发成本提高 100 倍
+- HMAC-SHA256 常数时间签名校验
+- Token 单次使用 + 5 分钟过期
+- CORS 按站点白名单 + Origin 校验
+- IP 限流（令牌桶，5 req/s burst 20）
+- `secret_key` 常数时间比较，防时序攻击
+- 安全头（X-Content-Type-Options / X-Frame-Options / Referrer-Policy）
 
-### 方式 A：单二进制
+### 智能风控
+- IP 动态难度：失败率高的 IP 自动提升 diff
+- IP 黑白名单（CIDR 支持）
+- 配置热重载：修改 `captcha.toml` 后 30s 内自动生效
 
-服务端在编译期嵌入 SDK + WASM，部署只需一个可执行文件。
+### 可观测
+- Prometheus `/metrics` 端点（challenge/verify/siteverify 计数器 + 延迟直方图）
+- [Grafana 面板模板](docs/grafana-dashboard.json)（7 面板开箱即用）
+- 结构化日志（非阻塞 writer）
 
-```bash
-# 从源码构建（需要 Rust + Node + wasm-pack）
-bash scripts/build-all.sh
+### 部署
+- **单二进制**：SDK + WASM 编译期嵌入，部署仅需一个文件
+- **TOML 配置**：`captcha.toml` + 环境变量 + CLI 参数三源加载
+- **Docker**：四阶段 Dockerfile + docker-compose
+- **CI/CD**：GitHub Actions 自动构建 Linux/macOS/Windows + Docker 镜像
+- **CLI 工具**：`gen-config` / `gen-secret` / `healthcheck`
 
-# 运行
-./target/release/captcha-server --config captcha.toml
-```
+### SDK（浏览器端）
+- 一行 `<script>` + data 属性，零 JS 代码
+- 无 Web Worker（chunked 主线程），无跨源限制
+- ARIA 无障碍 + 移动端响应式
+- WASM 检测 + 网络重试 + 超时
+- IIFE 单文件 **11 KB** / gzip **4.3 KB**
 
-### 方式 B：Docker
-
-```bash
-docker compose up -d   # 使用 captcha.toml 配置
-```
-
-### 方式 C：开发模式
-
-```bash
-# 终端 A：验证服务
-export CAPTCHA_SECRET="dev-secret-must-be-at-least-32-bytes!!"
-export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret","diff":18,"origins":["http://localhost:5173"]}}'
-cargo run -p captcha-server
-
-# 终端 B：SDK 开发服务器
-cd sdk && pnpm install && pnpm dev
-# 打开 http://localhost:5173
-```
+---
 
 ## 配置
 
-`captcha.toml`（或环境变量，env 优先级更高）：
-
 ```toml
+# captcha.toml
 [server]
 bind = "0.0.0.0:8787"
 secret = "运行 captcha-server gen-secret 生成"
@@ -110,55 +139,120 @@ token_ttl_secs = 300
 
 [[sites]]
 key = "pk_test"
-secret_key = "sk_test_secret"
+secret_key = "sk_test_secret_min16"
 diff = 18
 origins = ["https://example.com"]
+
+[risk]
+dynamic_diff_enabled = true
+dynamic_diff_max_increase = 4
+fail_rate_threshold = 0.7
+blocked_ips = []
+allowed_ips = ["127.0.0.1"]
 ```
+
+> 完整配置模板：[captcha.toml.example](captcha.toml.example)
 
 ## 难度参考
 
-| diff | 期望尝试 | 桌面端 | 移动端 | 适用场景 |
-|------|----------|--------|--------|---------|
-| 14   | 16 K     | ~0.2s  | ~0.5s  | 评论 / 点赞 |
-| 16   | 65 K     | ~0.5s  | ~1.2s  | 普通登录 |
-| 18   | 262 K    | ~1s    | ~2.5s  | 默认（注册、找回密码） |
-| 20   | 1 M      | ~3s    | ~8s    | 高敏感操作 |
+| diff | 桌面端 | 移动端 | 适用场景 |
+|------|--------|--------|---------|
+| 14 | ~0.2s | ~0.5s | 评论、点赞 |
+| 16 | ~0.5s | ~1.2s | 普通登录 |
+| **18** | **~1s** | **~2.5s** | **默认（注册、找回密码）** |
+| 20 | ~3s | ~8s | 高敏感操作 |
+
+基准数据（native release）：Argon2 base hash **5.4ms** / SHA-256 迭代 **89ns** / 单次 verify **5.2ms**
+
+---
+
+## API 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/challenge` | POST | 发放挑战 |
+| `/api/v1/verify` | POST | 提交解答 → captcha_token |
+| `/api/v1/verify/batch` | POST | 批量校验（最多 20 条） |
+| `/api/v1/siteverify` | POST | 业务后端核验 token |
+| `/sdk/*` | GET | 嵌入式 SDK + WASM（ETag/304/gzip） |
+| `/metrics` | GET | Prometheus 指标 |
+| `/healthz` | GET | 健康检查 |
+
+> `/api/v1/*` 格式自 v1.0.0 起冻结。详见 [API 稳定性承诺](docs/API_STABILITY.md)。
 
 ## 项目结构
 
 ```
 captcha/
 ├── crates/
-│   ├── captcha-core/     # 共享算法库（Argon2id + SHA-256 + HMAC）
-│   ├── captcha-server/   # HTTP 服务（嵌入 SDK 和 WASM 静态资源）
-│   └── captcha-wasm/     # 浏览器端求解器（WebAssembly）
-├── sdk/                  # 浏览器 SDK（TypeScript、构建为 IIFE）
+│   ├── captcha-core/       Argon2id + SHA-256 + HMAC（共享算法库）
+│   ├── captcha-server/     axum HTTP 服务 + 嵌入式静态资源
+│   └── captcha-wasm/       浏览器端 WASM 求解器
+├── sdk/                    TypeScript SDK（IIFE 单文件）
 ├── docs/
-│   ├── PROTOCOL.md       # 协议规范
-│   ├── INTEGRATION.md    # 接入指南
-│   ├── SECURITY.md       # 威胁模型 + 加固清单
-│   └── snippets/         # 7 种语言的后端接入代码
-├── Dockerfile            # 4 阶段构建
+│   ├── PROTOCOL.md         协议规范
+│   ├── INTEGRATION.md      接入指南
+│   ├── SECURITY.md         威胁模型 + 加固清单
+│   ├── UPGRADING.md        算法参数升级指南
+│   ├── API_STABILITY.md    API 冻结声明
+│   ├── ROADMAP.md          版本路线图
+│   ├── openapi.yaml        OpenAPI 3.1 规范
+│   ├── grafana-dashboard.json  Grafana 面板模板
+│   └── snippets/           7 种语言后端代码片段
+├── Dockerfile              四阶段构建
 ├── docker-compose.yml
-├── captcha.toml.example  # 配置模板
-└── scripts/              # 构建与开发脚本
+├── captcha.toml.example    配置模板
+├── CHANGELOG.md            版本变更历史
+└── scripts/                构建与开发脚本
+```
+
+## 从源码构建
+
+```bash
+# 前置要求：Rust 1.70+、Node 18+、pnpm、wasm-pack
+bash scripts/build-all.sh
+# 输出：target/release/captcha-server（单二进制，含嵌入的 SDK + WASM）
+```
+
+Windows 用户：
+```powershell
+.\scripts\build-all.ps1
+```
+
+## 开发模式
+
+```bash
+# 终端 A
+export CAPTCHA_SECRET="dev-secret-must-be-at-least-32-bytes!!"
+export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret_min16","diff":18,"origins":["http://localhost:5173"]}}'
+cargo run -p captcha-server
+
+# 终端 B
+cd sdk && pnpm install && pnpm dev
+# → http://localhost:5173
+```
+
+## 测试
+
+```bash
+cargo test                          # 45 个 Rust 测试
+cargo bench -p captcha-core         # 性能基准（criterion）
+cargo clippy --workspace            # 静态分析（0 warnings）
+cd sdk && pnpm type-check           # SDK 类型检查
 ```
 
 ## 文档
 
 | 文档 | 说明 |
 |------|------|
-| [协议规范](docs/PROTOCOL.md) | 挑战/解答/签名格式，双阶段算法细节 |
-| [接入指南](docs/INTEGRATION.md) | 部署、配置、前后端接入 |
-| [安全加固](docs/SECURITY.md) | 威胁模型、12 项安全对策、加固清单 |
+| [协议规范](docs/PROTOCOL.md) | 双阶段算法、签名格式、端点详情 |
+| [接入指南](docs/INTEGRATION.md) | 部署、配置、前后端接入三种方式 |
+| [安全加固](docs/SECURITY.md) | 12 项威胁对策 + 配置检查清单 |
 | [后端代码片段](docs/snippets/README.md) | Node/Python/Go/PHP/Java/C#/Ruby |
-
-## 运行测试
-
-```bash
-cargo test                     # 所有 Rust 测试（35 个）
-cd sdk && pnpm type-check      # SDK 类型检查
-```
+| [OpenAPI 规范](docs/openapi.yaml) | 全部 7 个端点的机器可读定义 |
+| [升级指南](docs/UPGRADING.md) | 算法参数变更的蓝绿发布步骤 |
+| [API 稳定性](docs/API_STABILITY.md) | v1.x 兼容性承诺 |
+| [变更日志](CHANGELOG.md) | v0.1.0 → v1.0.0 全部变更 |
 
 ## License
 
