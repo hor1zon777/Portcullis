@@ -7,6 +7,7 @@ import type { CaptchaOptions, CaptchaWidget } from './types';
 
 type State = 'idle' | 'running' | 'success' | 'error' | 'unsupported';
 const CHUNK_SIZE = 5000;
+const SOLVE_TIMEOUT_MS = 60_000;
 
 function expectedAttempts(diff: number): number {
   return Math.pow(2, diff);
@@ -19,37 +20,52 @@ function wasmSupported(): boolean {
   );
 }
 
+function bigIntSupported(): boolean {
+  try {
+    return typeof BigInt === 'function' && BigInt(1) + BigInt(0) === BigInt(1);
+  } catch {
+    return false;
+  }
+}
+
+type SolverInstance = {
+  step: (chunkSize: number | bigint) => {
+    found: boolean;
+    nonce?: number;
+    hash?: string;
+    attempts: number;
+    elapsed_ms?: number;
+    exhausted: boolean;
+  };
+  challenge_json: () => string;
+  sig: () => string;
+  free: () => void;
+};
+
 type WasmModule = {
   default: (input?: unknown) => Promise<unknown>;
   init: () => void;
   create_solver: (
     payloadJson: string,
-    hardLimit: bigint
-  ) => {
-    step: (chunkSize: bigint) => {
-      found: boolean;
-      nonce?: number;
-      hash?: string;
-      attempts: number;
-      elapsed_ms?: number;
-      exhausted: boolean;
-    };
-    challenge_json: () => string;
-    sig: () => string;
-    free: () => void;
-  };
+    hardLimit: number | bigint
+  ) => SolverInstance;
 };
 
-/** WASM 实例按 wasmBase 缓存，避免多 endpoint 串实例 */
 const wasmCache = new Map<string, Promise<WasmModule>>();
 
 async function loadWasm(wasmBase: string): Promise<WasmModule> {
   const cached = wasmCache.get(wasmBase);
   if (cached) return cached;
   const promise = (async () => {
-    const mod: WasmModule = await import(
-      /* @vite-ignore */ `${wasmBase}/captcha_wasm.js`
-    );
+    const url = `${wasmBase}/captcha_wasm.js`;
+    let mod: WasmModule;
+    try {
+      mod = await import(/* @vite-ignore */ url);
+    } catch (e) {
+      // 动态 import 失败时尝试 script 注入方式
+      console.warn('[Portcullis] dynamic import 失败，尝试 script 加载:', e);
+      mod = await loadWasmViaScript(url);
+    }
     await mod.default();
     mod.init();
     return mod;
@@ -58,10 +74,34 @@ async function loadWasm(wasmBase: string): Promise<WasmModule> {
   try {
     return await promise;
   } catch (e) {
-    // 加载失败时移除 cache，允许下次重试
     wasmCache.delete(wasmBase);
     throw e;
   }
+}
+
+/** 兼容不支持动态 import() 的移动端浏览器 */
+function loadWasmViaScript(url: string): Promise<WasmModule> {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = url;
+    script.onload = () => {
+      // wasm-bindgen web target 会挂到 wasm_bindgen 全局
+      const g = globalThis as unknown as Record<string, unknown>;
+      if (g.wasm_bindgen) {
+        resolve(g.wasm_bindgen as unknown as WasmModule);
+      } else {
+        reject(new Error('WASM 模块加载失败'));
+      }
+    };
+    script.onerror = () => reject(new Error('WASM 脚本加载失败: ' + url));
+    document.head.appendChild(script);
+  });
+}
+
+/** 安全的 BigInt 转换，不支持时 fallback 到 Number */
+function toBigIntSafe(n: number): number | bigint {
+  if (bigIntSupported()) return BigInt(n);
+  return n;
 }
 
 export class Widget implements CaptchaWidget {
@@ -189,6 +229,7 @@ export class Widget implements CaptchaWidget {
   }
 
   private reportError(err: Error) {
+    console.error('[Portcullis]', err);
     this.setState('error', t(this.opts.lang, 'failed'));
     this.opts.onError?.(err);
   }
@@ -206,24 +247,32 @@ export class Widget implements CaptchaWidget {
     this.token = null;
 
     try {
+      // 1. 加载 WASM
       const wasm = await loadWasm(this.opts.wasmBase);
+
+      // 2. 获取挑战
       const chResp = await fetchChallenge(
         this.opts.endpoint,
         this.opts.siteKey
       );
 
-      // diff 可被 widget 上的 data-diff 覆盖（仅影响 maxIters 上限的预期估算）
       const total = expectedAttempts(chResp.challenge.diff);
       const payloadJson = JSON.stringify(chResp);
+
+      // 3. 创建求解器（Argon2 base hash 同步计算）
+      // 用 setTimeout 让 UI 先更新再开始重计算
+      await new Promise((r) => setTimeout(r, 50));
       const solver = wasm.create_solver(
         payloadJson,
-        BigInt(this.opts.maxIters)
+        toBigIntSafe(this.opts.maxIters)
       );
 
       try {
+        // 4. 分块求解（带超时）
         const result = await this.solveChunked(solver, total);
         this.updateProgress(100);
 
+        // 5. 提交验证
         const challenge = JSON.parse(solver.challenge_json());
         const sig = solver.sig();
 
@@ -239,14 +288,12 @@ export class Widget implements CaptchaWidget {
         this.setState('success', t(this.opts.lang, 'success'));
         this.opts.onSuccess?.(this.token);
 
-        // 自动填充 target input
         const targetId = this.container.getAttribute('data-target');
         if (targetId) {
           const input = document.getElementById(targetId) as HTMLInputElement;
           if (input) input.value = this.token;
         }
 
-        // token 过期自动重置
         const ttl = v.exp - Date.now();
         if (ttl > 0) {
           this.setTimer(() => {
@@ -265,17 +312,24 @@ export class Widget implements CaptchaWidget {
   }
 
   private solveChunked(
-    solver: ReturnType<WasmModule['create_solver']>,
+    solver: SolverInstance,
     expectedTotal: number
   ): Promise<{ nonce: number; attempts: number }> {
     return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      const chunkVal = toBigIntSafe(CHUNK_SIZE);
+
       const tick = () => {
         if (this.destroyed) {
           reject(new Error('widget 已销毁'));
           return;
         }
+        if (Date.now() - startTime > SOLVE_TIMEOUT_MS) {
+          reject(new Error('求解超时（60s），请刷新重试'));
+          return;
+        }
         try {
-          const r = solver.step(BigInt(CHUNK_SIZE));
+          const r = solver.step(chunkVal);
           this.updateProgress((Number(r.attempts) / expectedTotal) * 100);
 
           if (r.found) {
