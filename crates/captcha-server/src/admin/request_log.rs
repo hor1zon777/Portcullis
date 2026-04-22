@@ -1,9 +1,6 @@
-use std::collections::VecDeque;
 use std::net::IpAddr;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-const MAX_ENTRIES: usize = 500;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LogEntry {
@@ -17,35 +14,26 @@ pub struct LogEntry {
 }
 
 pub struct RequestLog {
-    entries: Mutex<VecDeque<LogEntry>>,
+    count: AtomicUsize,
 }
 
 impl RequestLog {
     pub fn new() -> Self {
         Self {
-            entries: Mutex::new(VecDeque::with_capacity(MAX_ENTRIES)),
+            count: AtomicUsize::new(0),
         }
     }
 
-    pub fn push(&self, entry: LogEntry) {
-        let mut buf = self.entries.lock().unwrap();
-        if buf.len() >= MAX_ENTRIES {
-            buf.pop_front();
-        }
-        buf.push_back(entry);
-    }
-
-    pub fn recent(&self, limit: usize) -> Vec<LogEntry> {
-        let buf = self.entries.lock().unwrap();
-        buf.iter().rev().take(limit).cloned().collect()
+    pub fn inc(&self) {
+        self.count.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn len(&self) -> usize {
-        self.entries.lock().unwrap().len()
+        self.count.load(Ordering::Relaxed)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.lock().unwrap().is_empty()
+        self.len() == 0
     }
 }
 

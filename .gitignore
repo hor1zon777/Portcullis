@@ -5,9 +5,11 @@
 /admin-ui/node_modules
 /admin-ui/dist
 *.wasm
+*.tsbuildinfo
 captcha.toml
 .env
 captcha.db
 captcha.db-wal
 captcha.db-shm
 /data/
+.claude/

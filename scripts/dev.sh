@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 # 检查 CAPTCHA_SECRET
 export CAPTCHA_SECRET="${CAPTCHA_SECRET:-this-is-a-local-dev-secret-key-32+}"
 export CAPTCHA_BIND="${CAPTCHA_BIND:-127.0.0.1:8787}"
-export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret","diff":18,"origins":["http://localhost:5173"]}}'
+export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret_at_least16","diff":18,"origins":["http://localhost:5173"]}}'
 
 echo ">>> 启动验证服务 ($CAPTCHA_BIND)..."
 cargo run -p captcha-server &

@@ -136,7 +136,7 @@ sig     = HMAC-SHA256(server_secret, payload_json)
 ```json
 {
   "token": "<captcha_token>",
-  "secret_key": "sk_test_secret"
+  "secret_key": "sk_test_secret_at_least16"
 }
 ```
 

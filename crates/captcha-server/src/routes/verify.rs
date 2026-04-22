@@ -56,7 +56,7 @@ pub async fn verify(
             Some("verify failed".to_string())
         },
     };
-    state.request_log.push(log_entry.clone());
+    state.request_log.inc();
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || crate::db::insert_log(&db, &log_entry));
 

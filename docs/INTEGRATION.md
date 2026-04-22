@@ -17,7 +17,7 @@
 ```json
 {
   "pk_test": {
-    "secret_key": "sk_test_secret_min_16_chars",
+    "secret_key": "sk_test_secret_at_least16",
     "diff": 18,
     "origins": ["https://example.com", "https://www.example.com"]
   },
@@ -168,7 +168,7 @@ from fastapi import FastAPI, HTTPException
 
 app = FastAPI()
 CAPTCHA_ENDPOINT = "https://captcha.example.com"
-CAPTCHA_SECRET_KEY = "sk_test_secret"
+CAPTCHA_SECRET_KEY = "sk_test_secret_at_least16"
 
 @app.post("/login")
 async def login(req: dict):
@@ -194,7 +194,7 @@ async def login(req: dict):
 ```bash
 # 一个终端：启动验证服务
 export CAPTCHA_SECRET="this-is-a-dev-secret-must-be-32-bytes+"
-export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret","diff":12,"origins":["http://localhost:5173"]}}'
+export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret_at_least16","diff":12,"origins":["http://localhost:5173"]}}'
 cargo run -p captcha-server
 
 # 另一个终端：启动 SDK 开发服务器

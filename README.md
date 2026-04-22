@@ -144,7 +144,7 @@ token_ttl_secs = 300
 
 [[sites]]
 key = "pk_test"
-secret_key = "sk_test_secret_min16"
+secret_key = "sk_test_secret_at_least16"
 diff = 18
 origins = ["https://example.com"]
 
@@ -229,7 +229,7 @@ Windows 用户：
 # 终端 A：Rust 验证服务
 export CAPTCHA_SECRET="dev-secret-must-be-at-least-32-bytes!!"
 export CAPTCHA_ADMIN_TOKEN="dev-admin-token"
-export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret_min16","diff":18,"origins":["http://localhost:5173","http://localhost:5174"]}}'
+export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret_at_least16","diff":18,"origins":["http://localhost:5173","http://localhost:5174"]}}'
 cargo run -p captcha-server
 
 # 终端 B：CAPTCHA SDK 开发服务器
