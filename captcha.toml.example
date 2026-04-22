@@ -33,3 +33,9 @@ fail_rate_threshold = 0.7
 blocked_ips = []
 # 白名单（CIDR 或单 IP，跳过难度调整和限流）
 allowed_ips = ["127.0.0.1"]
+
+[admin]
+# 启用管理面板 API（/admin/api/*）
+enabled = true
+# 管理面板认证 Token，运行 `captcha-server gen-secret` 生成
+token = "CHANGE_ME_USE_captcha-server_gen-secret"

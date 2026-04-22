@@ -59,10 +59,17 @@
 
 PoW CAPTCHA 仅作为「机器人 vs 人类」的第一道闸门，增加自动化攻击的单次成本。
 
-## 未来工作（roadmap）
+## 管理面板安全
 
-- v1.1：Referer / Origin 强制校验
-- v1.2：IP 级 `tower-governor` 限流
-- v1.3：Redis 后端替代 DashMap（支持多实例）
-- v2.0：风控钩子（按 IP/UA 动态提升 diff）
-- v2.1：Prometheus metrics + Grafana 面板模板
+| 要求 | 说明 |
+|------|------|
+| Admin Token 保密 | `[admin].token` 与 `CAPTCHA_SECRET` 同等级别，不入 Git |
+| 网络隔离 | 生产环境中 `/admin/*` 应通过 Nginx `allow/deny` 限制内网访问 |
+| HTTPS | 管理面板登录传输 Token，必须走 HTTPS |
+| Token 轮换 | 定期更换 `[admin].token`，修改 TOML 30 秒内自动热重载 |
+
+## 后续改进方向
+
+- Redis 存储后端（多实例共享防重放）
+- E2E 测试（Playwright）
+- Fuzz 测试（cargo-fuzz）

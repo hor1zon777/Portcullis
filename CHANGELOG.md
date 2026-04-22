@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.1.0] — 2026-04-22
+
+**React 管理面板 + Docker Compose 多服务架构。**
+
+### 新增
+- **React 管理面板（admin-ui/）**
+  - Vite + React 18 + TypeScript + Tailwind CSS + @tanstack/react-query
+  - 5 个页面：登录 / 监控 / 站点管理 / 请求日志 / IP 风控
+  - Token 认证，5 秒自动刷新，构建产物 250 KB / gzip 79 KB
+- **管理 API（/admin/api/*）**
+  - `GET /admin/api/stats` — 实时指标
+  - `GET/POST /admin/api/sites` + `PUT/DELETE /admin/api/sites/:key` — 站点 CRUD
+  - `GET /admin/api/logs` — 请求日志（最近 200 条）
+  - `GET /admin/api/risk/ips` — IP 风控状态
+  - `POST/DELETE /admin/api/risk/block` — 封禁 / 解封 IP
+- **请求日志环形缓冲**：500 条容量，每次 `/verify` 写入 IP/site_key/nonce/状态/耗时
+- **`[admin]` 配置段** + `CAPTCHA_ADMIN_TOKEN` 环境变量
+- **Docker Compose 3 服务架构**：
+  - `captcha-server` — Rust 验证服务
+  - `admin-ui` — React SPA（Nginx 静态托管）
+  - `nginx` — 网关（路由分发 `/admin/api → server`、`/admin → admin-ui`、`/ → server`）
+- **`nginx/` 目录** — 网关 Nginx 配置 + Dockerfile
+
+### 移除
+- `crates/captcha-server/src/admin/dashboard.html` — 旧的 `include_str!` 嵌入式 HTML 面板（已替换为 React SPA）
+
+---
+
 ## [1.0.0] — 2026-04-22
 
 **生产就绪里程碑。`/api/v1/*` 接口格式冻结。**

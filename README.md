@@ -28,10 +28,10 @@
 ./captcha-server gen-secret  # 将输出填入 captcha.toml 的 secret 字段
 ./captcha-server --config captcha.toml
 
-# 方式 B：Docker
-docker run -d -p 8787:8787 \
-  -v $(pwd)/captcha.toml:/etc/captcha/captcha.toml:ro \
-  pow-captcha:latest
+# 方式 B：Docker Compose（3 服务：server + admin-ui + nginx）
+docker compose up -d
+# → http://localhost/admin/   管理面板
+# → http://localhost/api/...  公共 API
 ```
 
 ### 2. 前端接入（零 JS 代码）
@@ -111,10 +111,15 @@ curl -X POST https://your-captcha-server.com/api/v1/siteverify \
 - [Grafana 面板模板](docs/grafana-dashboard.json)（7 面板开箱即用）
 - 结构化日志（非阻塞 writer）
 
+### 管理面板
+- **React 可视化面板**（`/admin/`）：监控仪表盘 / 站点 CRUD / 请求日志 / IP 风控
+- Token 认证 + 5 秒自动刷新
+- 站点新增/删除立即热重载，IP 封禁/解封实时生效
+
 ### 部署
 - **单二进制**：SDK + WASM 编译期嵌入，部署仅需一个文件
 - **TOML 配置**：`captcha.toml` + 环境变量 + CLI 参数三源加载
-- **Docker**：四阶段 Dockerfile + docker-compose
+- **Docker Compose**：3 服务（captcha-server + admin-ui + nginx 网关）
 - **CI/CD**：GitHub Actions 自动构建 Linux/macOS/Windows + Docker 镜像
 - **CLI 工具**：`gen-config` / `gen-secret` / `healthcheck`
 
@@ -149,6 +154,10 @@ dynamic_diff_max_increase = 4
 fail_rate_threshold = 0.7
 blocked_ips = []
 allowed_ips = ["127.0.0.1"]
+
+[admin]
+enabled = true
+token = "运行 captcha-server gen-secret 生成"
 ```
 
 > 完整配置模板：[captcha.toml.example](captcha.toml.example)
@@ -174,6 +183,8 @@ allowed_ips = ["127.0.0.1"]
 | `/api/v1/verify` | POST | 提交解答 → captcha_token |
 | `/api/v1/verify/batch` | POST | 批量校验（最多 20 条） |
 | `/api/v1/siteverify` | POST | 业务后端核验 token |
+| `/admin/api/*` | GET/POST/PUT/DELETE | 管理面板 API（需 Bearer Token） |
+| `/admin/` | GET | React 管理面板（Docker Compose 模式） |
 | `/sdk/*` | GET | 嵌入式 SDK + WASM（ETag/304/gzip） |
 | `/metrics` | GET | Prometheus 指标 |
 | `/healthz` | GET | 健康检查 |
@@ -186,21 +197,14 @@ allowed_ips = ["127.0.0.1"]
 captcha/
 ├── crates/
 │   ├── captcha-core/       Argon2id + SHA-256 + HMAC（共享算法库）
-│   ├── captcha-server/     axum HTTP 服务 + 嵌入式静态资源
+│   ├── captcha-server/     axum HTTP 服务 + 嵌入式静态资源 + Admin API
 │   └── captcha-wasm/       浏览器端 WASM 求解器
-├── sdk/                    TypeScript SDK（IIFE 单文件）
-├── docs/
-│   ├── PROTOCOL.md         协议规范
-│   ├── INTEGRATION.md      接入指南
-│   ├── SECURITY.md         威胁模型 + 加固清单
-│   ├── UPGRADING.md        算法参数升级指南
-│   ├── API_STABILITY.md    API 冻结声明
-│   ├── ROADMAP.md          版本路线图
-│   ├── openapi.yaml        OpenAPI 3.1 规范
-│   ├── grafana-dashboard.json  Grafana 面板模板
-│   └── snippets/           7 种语言后端代码片段
-├── Dockerfile              四阶段构建
-├── docker-compose.yml
+├── sdk/                    浏览器 SDK（TypeScript IIFE 单文件）
+├── admin-ui/               React 管理面板（Vite + Tailwind + react-query）
+├── nginx/                  Docker 网关 Nginx 配置
+├── docs/                   协议/接入/安全/部署/升级/API 稳定性/OpenAPI/Grafana
+├── Dockerfile              captcha-server 构建
+├── docker-compose.yml      3 服务编排（server + admin-ui + nginx）
 ├── captcha.toml.example    配置模板
 ├── CHANGELOG.md            版本变更历史
 └── scripts/                构建与开发脚本
@@ -222,14 +226,19 @@ Windows 用户：
 ## 开发模式
 
 ```bash
-# 终端 A
+# 终端 A：Rust 验证服务
 export CAPTCHA_SECRET="dev-secret-must-be-at-least-32-bytes!!"
-export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret_min16","diff":18,"origins":["http://localhost:5173"]}}'
+export CAPTCHA_ADMIN_TOKEN="dev-admin-token"
+export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret_min16","diff":18,"origins":["http://localhost:5173","http://localhost:5174"]}}'
 cargo run -p captcha-server
 
-# 终端 B
+# 终端 B：CAPTCHA SDK 开发服务器
 cd sdk && pnpm install && pnpm dev
 # → http://localhost:5173
+
+# 终端 C：管理面板开发服务器（HMR）
+cd admin-ui && pnpm install && pnpm dev
+# → http://localhost:5174/admin/
 ```
 
 ## 测试

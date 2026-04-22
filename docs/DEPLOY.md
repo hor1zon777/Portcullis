@@ -199,6 +199,7 @@ allowed_ips = []
 | `CAPTCHA_CHALLENGE_TTL_SECS` | `server.challenge_ttl_secs` |
 | `CAPTCHA_TOKEN_TTL_SECS` | `server.token_ttl_secs` |
 | `CAPTCHA_SITES` | 整个 `[[sites]]` 段（JSON 格式） |
+| `CAPTCHA_ADMIN_TOKEN` | `admin.token`（管理面板认证） |
 
 ```bash
 # 环境变量方式启动（不需要 captcha.toml）
@@ -443,48 +444,56 @@ async def login(req: dict):
 
 ## 六、Docker 部署
 
-### 6.1 使用 docker-compose（推荐）
+### 6.1 架构
+
+Docker Compose 编排 3 个服务：
+
+| 服务 | 说明 | 端口 |
+|------|------|------|
+| `captcha-server` | Rust 验证服务 | 8787（内部） |
+| `admin-ui` | React 管理面板（Nginx 静态托管） | 80（内部） |
+| `nginx` | 网关，统一入口 | **80（对外）** |
+
+路由规则：
+- `/admin/api/*` → captcha-server（管理 API）
+- `/admin/*` → admin-ui（React SPA）
+- `/*` → captcha-server（公共 API + SDK + metrics）
+
+### 6.2 使用 docker-compose（推荐）
 
 ```bash
 # 1. 准备配置文件
 cp captcha.toml.example captcha.toml
-# 编辑 captcha.toml（参考上面的配置说明）
+# 编辑 captcha.toml（参考上面的配置说明，记得设置 [admin] 段）
 
 # 2. 构建并启动
-docker compose up -d
+docker compose up -d --build
 
-# 3. 查看日志
+# 3. 访问
+# 管理面板：http://localhost/admin/
+# 公共 API：http://localhost/api/v1/challenge
+# SDK：http://localhost/sdk/pow-captcha.js
+# 指标：http://localhost/metrics
+
+# 4. 查看日志
 docker compose logs -f
 
-# 4. 停止
+# 5. 停止
 docker compose down
-```
-
-### 6.2 直接 docker run
-
-```bash
-docker build -t pow-captcha .
-
-docker run -d \
-  --name pow-captcha \
-  -p 8787:8787 \
-  -v $(pwd)/captcha.toml:/etc/captcha/captcha.toml:ro \
-  --restart unless-stopped \
-  pow-captcha --config /etc/captcha/captcha.toml
 ```
 
 ### 6.3 健康检查
 
-docker-compose.yml 已内置健康检查：
-
 ```bash
-docker inspect --format='{{.State.Health.Status}}' pow-captcha
-# → healthy
+docker compose ps
+# 查看各服务状态
 ```
 
 ---
 
 ## 七、反向代理（Nginx）
+
+> **Docker Compose 模式**已自带 Nginx 网关（`nginx/nginx.conf`），以下配置仅用于单二进制部署 + 自行搭建 Nginx 的场景。
 
 生产环境建议在 Nginx 后面运行，提供 HTTPS 终止。
 
