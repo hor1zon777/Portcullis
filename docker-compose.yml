@@ -25,7 +25,7 @@ services:
   nginx:
     image: ghcr.io/hor1zon777/portcullis/nginx:latest
     ports:
-      - "80:80"
+      - "${NGINX_PORT:-80}:80"
     depends_on:
       - captcha-server
       - admin-ui
