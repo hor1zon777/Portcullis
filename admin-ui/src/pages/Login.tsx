@@ -26,10 +26,10 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
-      <form onSubmit={handleSubmit} className="card w-96 dark:bg-gray-900">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 via-blue-50/30 to-gray-100 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+      <form onSubmit={handleSubmit} className="card w-96 dark:bg-gray-900 dialog-enter shadow-xl">
         <div className="flex items-center gap-2 mb-6">
-          <Lock size={20} className="text-primary" />
+          <div className="p-2 bg-primary/10 rounded-lg"><Lock size={20} className="text-primary" /></div>
           <h1 className="text-lg font-semibold">PoW CAPTCHA Admin</h1>
         </div>
         <label htmlFor="admin-token" className="block text-sm font-medium mb-2">Admin Token</label>

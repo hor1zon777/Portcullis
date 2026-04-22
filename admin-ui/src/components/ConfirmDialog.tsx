@@ -35,8 +35,8 @@ export function ConfirmDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
-      <div className="card max-w-sm w-full mx-4" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm fade-in" onClick={onCancel}>
+      <div className="card max-w-sm w-full mx-4 dialog-enter" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start gap-3 mb-4">
           {danger && <AlertTriangle size={20} className="text-destructive mt-0.5 flex-shrink-0" />}
           <div>

@@ -8,11 +8,11 @@ import { useRef } from 'react';
 
 function KpiCard({ label, value, sub, icon: Icon }: { label: string; value: string | number; sub?: string; icon: React.ElementType }) {
   return (
-    <div className="card dark:bg-gray-900 flex items-start gap-4">
-      <div className="p-3 bg-primary/10 rounded-lg"><Icon size={20} className="text-primary" /></div>
+    <div className="card dark:bg-gray-900 flex items-start gap-4 hover:scale-[1.02] transition-transform duration-200 slide-up">
+      <div className="p-3 bg-primary/10 rounded-xl"><Icon size={20} className="text-primary" /></div>
       <div>
         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</div>
-        <div className="text-2xl font-bold mt-1">{value}</div>
+        <div className="text-2xl font-bold mt-1 tabular-nums">{value}</div>
         {sub && <div className="text-xs text-muted-foreground mt-1">{sub}</div>}
       </div>
     </div>
