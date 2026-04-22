@@ -6,6 +6,9 @@ services:
     command: ["--config", "/etc/captcha/captcha.toml"]
     volumes:
       - ./captcha.toml:/etc/captcha/captcha.toml:ro
+      - captcha-data:/data
+    environment:
+      - CAPTCHA_DB_PATH=/data/captcha.db
     expose:
       - "8787"
     restart: unless-stopped
@@ -34,3 +37,6 @@ services:
       - captcha-server
       - admin-ui
     restart: unless-stopped
+
+volumes:
+  captcha-data:
