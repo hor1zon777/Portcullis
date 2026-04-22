@@ -1,7 +1,11 @@
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use axum::extract::Path;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
+use sha2::{Digest, Sha256};
 
 #[derive(RustEmbed)]
 #[folder = "$CARGO_MANIFEST_DIR/../../sdk/dist/"]
@@ -12,6 +16,30 @@ struct SdkDist;
 #[folder = "$CARGO_MANIFEST_DIR/../../sdk/pkg/"]
 #[prefix = ""]
 struct SdkPkg;
+
+/// 编译期嵌入的文件内容不变，ETag 只需算一次。
+static ETAG_CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
+
+fn get_etag_map() -> &'static HashMap<String, String> {
+    ETAG_CACHE.get_or_init(|| {
+        let mut map = HashMap::new();
+        for name in SdkDist::iter() {
+            if let Some(f) = SdkDist::get(&name) {
+                let hash = Sha256::digest(&f.data);
+                map.insert(name.to_string(), format!("\"{:x}\"", hash));
+            }
+        }
+        for name in SdkPkg::iter() {
+            if !map.contains_key(name.as_ref()) {
+                if let Some(f) = SdkPkg::get(&name) {
+                    let hash = Sha256::digest(&f.data);
+                    map.insert(name.to_string(), format!("\"{:x}\"", hash));
+                }
+            }
+        }
+        map
+    })
+}
 
 fn guess_mime(file: &str) -> &'static str {
     match file.rsplit('.').next() {
@@ -26,11 +54,16 @@ fn guess_mime(file: &str) -> &'static str {
 }
 
 fn build_response(file: &str, body: Vec<u8>) -> Response {
+    let etag = get_etag_map()
+        .get(file)
+        .cloned()
+        .unwrap_or_default();
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, guess_mime(file))
-        // 1 小时缓存。文件未做 content-hash，所以不能用 immutable
         .header(header::CACHE_CONTROL, "public, max-age=3600")
+        .header(header::ETAG, &etag)
         .header(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
             header::HeaderValue::from_static("*"),
@@ -42,13 +75,36 @@ fn build_response(file: &str, body: Vec<u8>) -> Response {
         })
 }
 
-fn serve_file<E: RustEmbed>(file: &str) -> Option<Response> {
-    E::get(file).map(|content| build_response(file, content.data.into_owned()))
+fn serve_file<E: RustEmbed>(file: &str) -> Option<(String, Vec<u8>)> {
+    E::get(file).map(|content| {
+        let etag = get_etag_map()
+            .get(file)
+            .cloned()
+            .unwrap_or_default();
+        (etag, content.data.into_owned())
+    })
 }
 
 /// GET /sdk/{*file}
-pub async fn serve_sdk(Path(file): Path<String>) -> Response {
-    serve_file::<SdkDist>(&file)
-        .or_else(|| serve_file::<SdkPkg>(&file))
-        .unwrap_or_else(|| StatusCode::NOT_FOUND.into_response())
+/// 支持 ETag + If-None-Match → 304 Not Modified。
+pub async fn serve_sdk(headers: HeaderMap, Path(file): Path<String>) -> Response {
+    let found = serve_file::<SdkDist>(&file).or_else(|| serve_file::<SdkPkg>(&file));
+
+    let Some((etag, body)) = found else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    // 304 如果 ETag 匹配
+    if let Some(inm) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+        if !etag.is_empty() && inm.contains(&etag) {
+            return Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header(header::ETAG, &etag)
+                .header(header::CACHE_CONTROL, "public, max-age=3600")
+                .body(axum::body::Body::empty())
+                .unwrap_or_else(|_| StatusCode::NOT_MODIFIED.into_response());
+        }
+    }
+
+    build_response(&file, body)
 }

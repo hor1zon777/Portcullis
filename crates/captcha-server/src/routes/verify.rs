@@ -30,6 +30,20 @@ pub async fn verify(
     headers: HeaderMap,
     Json(req): Json<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
+    let started = std::time::Instant::now();
+    let site_key = req.challenge.site_key.clone();
+
+    let result = do_verify(state, headers, req).await;
+
+    crate::metrics::record_verify(&site_key, result.is_ok(), started);
+    result
+}
+
+async fn do_verify(
+    state: AppState,
+    headers: HeaderMap,
+    req: VerifyRequest,
+) -> Result<Json<VerifyResponse>, AppError> {
     // 0. Origin 白名单校验
     if let Some(site) = state.config.get_site(&req.challenge.site_key) {
         check_origin(&headers, &site.origins)?;

@@ -1,0 +1,222 @@
+openapi: 3.1.0
+info:
+  title: PoW CAPTCHA API
+  version: 0.5.0
+  description: |
+    基于 Argon2id + SHA-256 双阶段工作量证明的验证码服务。
+    - /challenge：发放挑战
+    - /verify：校验解答，返回 captcha_token
+    - /siteverify：业务后端核验 token
+
+servers:
+  - url: http://localhost:8787
+    description: 本地开发
+
+paths:
+  /api/v1/challenge:
+    post:
+      summary: 发放 PoW 挑战
+      operationId: createChallenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [site_key]
+              properties:
+                site_key:
+                  type: string
+                  maxLength: 64
+                  example: pk_test
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeResponse'
+        '400':
+          description: 未知 site_key 或 site_key 过长
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/verify:
+    post:
+      summary: 提交 PoW 解答换取 captcha_token
+      operationId: verify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge, sig, nonce]
+              properties:
+                challenge:
+                  $ref: '#/components/schemas/Challenge'
+                sig:
+                  type: string
+                  description: base64 编码的 HMAC-SHA256 签名
+                nonce:
+                  type: integer
+                  format: uint64
+      responses:
+        '200':
+          description: 验证成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+        '400':
+          description: 挑战过期 / PoW 不满足 / 格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 签名验证失败
+        '409':
+          description: 挑战已被使用（重放）
+
+  /api/v1/siteverify:
+    post:
+      summary: 业务后端核验 captcha_token
+      operationId: siteVerify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, secret_key]
+              properties:
+                token:
+                  type: string
+                  description: 从 /verify 获取的 captcha_token
+                secret_key:
+                  type: string
+                  description: 站点私钥
+      responses:
+        '200':
+          description: 始终 200，用 success 字段表示结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteVerifyResponse'
+
+  /healthz:
+    get:
+      summary: 健康检查
+      operationId: healthz
+      responses:
+        '200':
+          description: ok
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /metrics:
+    get:
+      summary: Prometheus 指标
+      operationId: metrics
+      responses:
+        '200':
+          description: Prometheus text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /sdk/{file}:
+    get:
+      summary: 嵌入式 SDK / WASM 静态资源
+      operationId: serveSdk
+      parameters:
+        - name: file
+          in: path
+          required: true
+          schema:
+            type: string
+          examples:
+            js:
+              value: pow-captcha.js
+            wasm:
+              value: captcha_wasm_bg.wasm
+      responses:
+        '200':
+          description: 文件内容
+        '304':
+          description: ETag 匹配，未修改
+        '404':
+          description: 文件不存在
+
+components:
+  schemas:
+    Challenge:
+      type: object
+      required: [id, salt, diff, exp, site_key]
+      properties:
+        id:
+          type: string
+          format: uuid
+        salt:
+          type: string
+          description: 16 字节盐（base64 标准编码）
+        diff:
+          type: integer
+          minimum: 0
+          maximum: 32
+        exp:
+          type: integer
+          format: uint64
+          description: 过期时间（unix 毫秒）
+        site_key:
+          type: string
+
+    ChallengeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        challenge:
+          $ref: '#/components/schemas/Challenge'
+        sig:
+          type: string
+          description: HMAC-SHA256 签名（base64）
+
+    VerifyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        captcha_token:
+          type: string
+        exp:
+          type: integer
+          format: uint64
+
+    SiteVerifyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        challenge_id:
+          type: string
+        site_key:
+          type: string
+        error:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string

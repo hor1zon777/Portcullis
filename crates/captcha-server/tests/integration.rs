@@ -99,7 +99,7 @@ struct SiteVerifyResp {
 
 #[tokio::test]
 async fn e2e_happy_path() {
-    let app = build_router(AppState::new(test_config()), None);
+    let app = build_router(AppState::new(test_config()), None, None);
 
     let (status, ch): (_, ChallengeResp) =
         post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
@@ -132,7 +132,7 @@ async fn e2e_happy_path() {
 
 #[tokio::test]
 async fn replay_rejected() {
-    let app = build_router(AppState::new(test_config()), None);
+    let app = build_router(AppState::new(test_config()), None, None);
 
     let (_, ch): (_, ChallengeResp) =
         post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
@@ -145,7 +145,7 @@ async fn replay_rejected() {
 
 #[tokio::test]
 async fn bad_sig_rejected() {
-    let app = build_router(AppState::new(test_config()), None);
+    let app = build_router(AppState::new(test_config()), None, None);
 
     let (_, ch): (_, ChallengeResp) =
         post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
@@ -162,7 +162,7 @@ async fn bad_sig_rejected() {
 
 #[tokio::test]
 async fn unknown_site_rejected() {
-    let app = build_router(AppState::new(test_config()), None);
+    let app = build_router(AppState::new(test_config()), None, None);
     let status = post_raw(
         &app,
         "/api/v1/challenge",
@@ -174,7 +174,7 @@ async fn unknown_site_rejected() {
 
 #[tokio::test]
 async fn wrong_nonce_rejected() {
-    let app = build_router(AppState::new(test_config()), None);
+    let app = build_router(AppState::new(test_config()), None, None);
 
     let (_, ch): (_, ChallengeResp) =
         post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
@@ -199,7 +199,7 @@ async fn wrong_nonce_rejected() {
 
 #[tokio::test]
 async fn siteverify_wrong_secret_key() {
-    let app = build_router(AppState::new(test_config()), None);
+    let app = build_router(AppState::new(test_config()), None, None);
 
     let (_, ch): (_, ChallengeResp) =
         post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
@@ -223,7 +223,7 @@ async fn siteverify_wrong_secret_key() {
 
 #[tokio::test]
 async fn healthz() {
-    let app = build_router(AppState::new(test_config()), None);
+    let app = build_router(AppState::new(test_config()), None, None);
     let req = Request::builder()
         .method("GET")
         .uri("/healthz")

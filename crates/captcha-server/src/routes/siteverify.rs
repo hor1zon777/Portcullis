@@ -25,6 +25,7 @@ pub struct SiteVerifyResponse {
 }
 
 fn fail(msg: &str) -> Json<SiteVerifyResponse> {
+    crate::metrics::record_siteverify(false);
     Json(SiteVerifyResponse {
         success: false,
         challenge_id: None,
@@ -67,6 +68,7 @@ pub async fn site_verify(
         return Ok(fail("token 已被核验过（单次使用）"));
     }
 
+    crate::metrics::record_siteverify(true);
     Ok(Json(SiteVerifyResponse {
         success: true,
         challenge_id: Some(challenge_id),

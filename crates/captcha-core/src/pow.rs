@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use argon2::{Algorithm, Argon2, Params, Version};
 use sha2::{Digest, Sha256};
 
@@ -20,16 +22,20 @@ const T_COST: u32 = 1;
 const P_COST: u32 = 1;
 const ARGON2_OUT: usize = 32;
 
-fn build_argon2() -> Argon2<'static> {
-    let params =
-        Params::new(M_COST, T_COST, P_COST, Some(ARGON2_OUT)).expect("Argon2 参数无效");
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+static ARGON2: OnceLock<Argon2<'static>> = OnceLock::new();
+
+fn argon2() -> &'static Argon2<'static> {
+    ARGON2.get_or_init(|| {
+        let params =
+            Params::new(M_COST, T_COST, P_COST, Some(ARGON2_OUT)).expect("Argon2 参数无效");
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+    })
 }
 
 /// Phase 1：计算 Argon2id base hash（每个 challenge 仅一次）。
 pub fn compute_base_hash(challenge: &Challenge) -> [u8; ARGON2_OUT] {
     let mut output = [0u8; ARGON2_OUT];
-    build_argon2()
+    argon2()
         .hash_password_into(challenge.id.as_bytes(), &challenge.salt, &mut output)
         .expect("Argon2 哈希失败");
     output

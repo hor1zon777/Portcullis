@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod metrics;
 pub mod rate_limit;
 pub mod routes;
 pub mod state;
@@ -11,6 +12,7 @@ use axum::http::HeaderValue;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
+use metrics_exporter_prometheus::PrometheusHandle;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -21,8 +23,14 @@ use crate::state::AppState;
 
 const BODY_LIMIT: usize = 64 * 1024;
 
-/// 构建完整路由。可选注入 IP 限流器（测试时传 None 跳过限流）。
-pub fn build_router(app_state: AppState, limiter: Option<IpRateLimiter>) -> Router {
+/// 构建完整路由。
+/// - `limiter`: 注入 IP 限流器（测试时传 None 跳过）
+/// - `prom_handle`: 注入 Prometheus handle 以启用 /metrics 端点
+pub fn build_router(
+    app_state: AppState,
+    limiter: Option<IpRateLimiter>,
+    prom_handle: Option<PrometheusHandle>,
+) -> Router {
     let allowed_origins: Vec<HeaderValue> = app_state
         .config
         .sites
@@ -46,9 +54,17 @@ pub fn build_router(app_state: AppState, limiter: Option<IpRateLimiter>) -> Rout
         .route("/api/v1/siteverify", post(routes::siteverify::site_verify))
         .route("/sdk/*file", get(static_assets::serve_sdk))
         .route("/healthz", get(|| async { "ok" }))
-        .with_state(app_state);
+        .with_state(app_state.clone());
 
-    // IP 限流层（测试时不注入，避免无 ConnectInfo 的环境问题）
+    // /metrics 端点使用独立的 state（PrometheusHandle）
+    if let Some(handle) = prom_handle {
+        router = router.merge(
+            Router::new()
+                .route("/metrics", get(metrics::metrics_handler))
+                .with_state(handle),
+        );
+    }
+
     if let Some(lim) = limiter {
         router = router
             .route_layer(middleware::from_fn_with_state(lim, rate_limit_middleware));
@@ -57,7 +73,6 @@ pub fn build_router(app_state: AppState, limiter: Option<IpRateLimiter>) -> Rout
     router
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT))
-        // gzip / br 压缩，对 /sdk/*.js 和大响应体尤其有用
         .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::X_CONTENT_TYPE_OPTIONS,

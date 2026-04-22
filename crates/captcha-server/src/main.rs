@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use captcha_server::config::{self, Cli, Commands};
+use captcha_server::metrics as app_metrics;
 use captcha_server::rate_limit::IpRateLimiter;
 use captcha_server::{build_router, state::AppState};
 use clap::Parser;
@@ -27,12 +28,18 @@ async fn main() {
         }
     }
 
+    // 非阻塞日志 writer：避免高 QPS 下阻塞 tokio runtime
+    let (non_blocking, _guard) = tracing_appender::non_blocking(std::io::stdout());
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "captcha_server=info,tower_http=info".into()),
         )
+        .with_writer(non_blocking)
         .init();
+
+    // 安装 Prometheus exporter
+    let prom_handle = app_metrics::install();
 
     let cfg = config::Config::load(&cli);
     let bind = cfg.bind.clone();
@@ -40,26 +47,23 @@ async fn main() {
 
     let app_state = AppState::new(cfg);
 
-    // 后台过期清理
+    // 后台清理 + 定期 gauge 更新
     let store = app_state.store.clone();
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_secs(60));
+        let mut ticker = tokio::time::interval(Duration::from_secs(30));
         loop {
             ticker.tick().await;
-            let removed = store.cleanup_expired();
-            if removed > 0 {
-                tracing::debug!("清理 {} 条过期记录，剩余 {}", removed, store.len());
-            }
+            store.cleanup_expired();
+            app_metrics::register_store_metrics(&store);
         }
     });
 
-    // IP 限流：突发 20，持续 5 req/s
     let limiter = IpRateLimiter::new(5, 20);
-    let app = build_router(app_state, Some(limiter));
+    let app = build_router(app_state, Some(limiter), Some(prom_handle));
 
     let addr: SocketAddr = bind.parse().expect("bind 地址格式错误");
     tracing::info!(
-        "PoW 验证码服务启动：http://{} （{} 站点，IP 限流 5 req/s burst 20）",
+        "PoW 验证码服务启动：http://{} （{} 站点；/metrics 已启用）",
         addr,
         site_count
     );

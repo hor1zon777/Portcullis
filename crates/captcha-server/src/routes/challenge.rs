@@ -87,6 +87,8 @@ pub async fn create(
 
     let sig_bytes = crypto::sign(&challenge.to_sign_bytes(), &state.config.secret);
 
+    crate::metrics::record_challenge_issued(&challenge.site_key);
+
     tracing::debug!(
         challenge_id = %challenge.id,
         site_key = %challenge.site_key,
