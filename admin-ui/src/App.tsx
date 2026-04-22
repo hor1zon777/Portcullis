@@ -70,7 +70,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <nav className={cn(
-          'fixed inset-y-0 left-0 top-[56px] z-40 w-60 bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-r border-border/50 dark:border-gray-800/50 p-4 transition-all duration-300 ease-out md:relative md:top-0 md:translate-x-0',
+          'fixed inset-y-0 left-0 top-[56px] z-40 w-60 bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-r border-border/50 dark:border-gray-800/50 p-4 flex flex-col transition-all duration-300 ease-out md:relative md:top-0 md:translate-x-0',
           sideOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
         )}>
           <div className="space-y-1">
@@ -90,8 +90,8 @@ function Layout({ children }: { children: React.ReactNode }) {
               );
             })}
           </div>
-          <div className="mt-auto pt-6 border-t border-border/50 dark:border-gray-800/50 mt-8">
-            <div className="px-3 text-[11px] text-muted-foreground">
+          <div className="mt-auto pt-4 border-t border-border/50 dark:border-gray-800/50">
+            <div className="px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
               <span className="pulse-dot">Portcullis v1.1</span>
             </div>
           </div>
