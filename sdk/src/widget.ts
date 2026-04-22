@@ -177,7 +177,7 @@ export class Widget implements CaptchaWidget {
     const brand = document.createElement('div');
     brand.className = 'powc-brand';
     brand.setAttribute('aria-hidden', 'true');
-    brand.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L3 7v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V7l-9-5z"/><path d="m9 12 2 2 4-4"/></svg><span class="powc-brand-text">Portcullis</span><span class="powc-brand-ver">v1.1.1</span>`;
+    brand.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L3 7v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V7l-9-5z"/><path d="m9 12 2 2 4-4"/></svg><span class="powc-brand-text">Portcullis</span><span class="powc-brand-ver">v1.1.2</span>`;
 
     labelWrap.appendChild(label);
     labelWrap.appendChild(progress);
