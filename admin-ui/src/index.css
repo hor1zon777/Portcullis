@@ -141,11 +141,11 @@
 
   /* ──── 脉冲点 ──── */
   .pulse-dot {
-    @apply relative;
+    @apply inline-flex items-center gap-2;
   }
-  .pulse-dot::after {
+  .pulse-dot::before {
     content: '';
-    @apply absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500;
+    @apply w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0;
     animation: pulse 2s ease-in-out infinite;
   }
   @keyframes pulse {
