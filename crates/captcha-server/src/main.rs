@@ -9,6 +9,9 @@ use clap::Parser;
 
 #[tokio::main]
 async fn main() {
+    // 自动加载 .env（文件不存在时静默跳过）
+    dotenvy::dotenv().ok();
+
     let cli = Cli::parse();
 
     if let Some(cmd) = &cli.command {
