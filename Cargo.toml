@@ -1,0 +1,16 @@
+[workspace]
+members = [
+    "crates/captcha-core",
+    "crates/captcha-server",
+    "crates/captcha-wasm",
+]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+# 针对 captcha-wasm 的 release 优化：体积优先
+[profile.release.package.captcha-wasm]
+opt-level = "z"

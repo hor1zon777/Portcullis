@@ -1,0 +1,11 @@
+# 忽略所有 build 产物和本地配置
+target/
+sdk/node_modules/
+sdk/dist/
+sdk/pkg/
+.git/
+.github/
+*.toml.local
+captcha.toml
+# 但要保留配置模板
+!captcha.toml.example

@@ -1,0 +1,16 @@
+services:
+  captcha:
+    build: .
+    image: pow-captcha:latest
+    container_name: pow-captcha
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./captcha.toml:/etc/captcha/captcha.toml:ro
+    command: ["--config", "/etc/captcha/captcha.toml"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/captcha-server", "--help"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

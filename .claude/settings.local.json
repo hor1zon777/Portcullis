@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test *)",
+      "Bash(cargo check *)",
+      "Bash(wasm-pack build *)",
+      "Bash(pnpm type-check *)",
+      "Bash(pnpm build *)"
+    ]
+  }
+}

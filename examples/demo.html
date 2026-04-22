@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PoW CAPTCHA Demo</title>
+    <style>
+      :root {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+          'PingFang SC', 'Microsoft YaHei', sans-serif;
+        color-scheme: light;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+        background: #f0f0f0;
+      }
+      .card {
+        background: #fff;
+        border-radius: 12px;
+        padding: 32px 36px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        width: 380px;
+      }
+      h2 {
+        margin: 0 0 24px;
+        font-size: 20px;
+        font-weight: 600;
+      }
+      label {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 6px;
+        color: #555;
+      }
+      input {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        font-size: 14px;
+        margin-bottom: 16px;
+      }
+      input:focus {
+        outline: none;
+        border-color: #0969da;
+        box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.15);
+      }
+      #captcha-container {
+        display: flex;
+        justify-content: center;
+        margin: 16px 0;
+      }
+      button[type='submit'] {
+        width: 100%;
+        padding: 10px;
+        font-size: 14px;
+        font-weight: 600;
+        background: #0969da;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: opacity 0.15s;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      button:not(:disabled):hover {
+        background: #0860ca;
+      }
+      #result {
+        margin-top: 16px;
+        padding: 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        display: none;
+      }
+      #result.ok {
+        display: block;
+        background: #dafbe1;
+        border: 1px solid #a4e7b5;
+        color: #116329;
+      }
+      #result.err {
+        display: block;
+        background: #ffebe9;
+        border: 1px solid #f5c6c6;
+        color: #82071e;
+      }
+      .dark-toggle {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        padding: 8px 14px;
+        font-size: 12px;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        background: #fff;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <button class="dark-toggle" id="theme-btn">切换 Dark</button>
+
+    <div class="card">
+      <h2>PoW CAPTCHA 演示</h2>
+      <form id="form">
+        <label for="username">用户名</label>
+        <input id="username" name="username" required placeholder="alice" />
+
+        <label for="password">密码</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          required
+          placeholder="••••••"
+        />
+
+        <div id="captcha-container"></div>
+
+        <input type="hidden" id="captcha_token" name="captcha_token" />
+
+        <button type="submit" id="submit-btn" disabled>登录</button>
+      </form>
+
+      <div id="result"></div>
+    </div>
+
+    <script type="module">
+      // ------ 配置 ------
+      // 本地开发时，Vite 代理 /api → captcha-server(:8787)
+      // 以下地址根据你的部署情况修改
+      const ENDPOINT = 'http://localhost:8787';
+      const SITE_KEY = 'pk_test';
+
+      // 加载 SDK（开发模式直接引用源码 / 生产引用构建产物）
+      const { render } = await import('../sdk/src/index.ts');
+
+      let currentTheme = 'light';
+      let widget = null;
+
+      function mount() {
+        const container = document.getElementById('captcha-container');
+        container.innerHTML = '';
+        widget = render(container, {
+          siteKey: SITE_KEY,
+          endpoint: ENDPOINT,
+          // WASM 文件所在目录（相对或绝对均可）
+          wasmBase: '../sdk/pkg',
+          theme: currentTheme,
+          lang: 'zh-CN',
+          onSuccess(token) {
+            document.getElementById('captcha_token').value = token;
+            document.getElementById('submit-btn').disabled = false;
+            console.log('[demo] captcha_token:', token);
+          },
+          onError(err) {
+            console.error('[demo] error:', err);
+          },
+          onExpired() {
+            document.getElementById('submit-btn').disabled = true;
+            console.warn('[demo] token 已过期');
+          },
+        });
+      }
+
+      mount();
+
+      // Dark mode 切换
+      document.getElementById('theme-btn').addEventListener('click', () => {
+        currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+        document.documentElement.style.colorScheme = currentTheme;
+        document.body.style.background =
+          currentTheme === 'dark' ? '#0d1117' : '#f0f0f0';
+        document.querySelector('.card').style.background =
+          currentTheme === 'dark' ? '#161b22' : '#fff';
+        document.querySelector('.card').style.color =
+          currentTheme === 'dark' ? '#e6edf3' : '#1f2328';
+        widget.destroy();
+        mount();
+      });
+
+      // 表单提交（演示用，只在控制台输出）
+      document.getElementById('form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const token = document.getElementById('captcha_token').value;
+        if (!token) return alert('请先完成验证');
+        const result = document.getElementById('result');
+        result.className = 'ok';
+        result.style.display = 'block';
+        result.textContent = `提交成功！captcha_token = ${token.slice(0, 40)}...`;
+      });
+    </script>
+  </body>
+</html>
