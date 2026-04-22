@@ -38,9 +38,9 @@ pub async fn stats(State(state): State<AppState>) -> Json<StatsResponse> {
 #[derive(Serialize)]
 pub struct SiteView {
     key: String,
+    secret_key: String,
     diff: u8,
     origins: Vec<String>,
-    has_secret: bool,
 }
 
 pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
@@ -50,9 +50,9 @@ pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
         .iter()
         .map(|(k, v)| SiteView {
             key: k.clone(),
+            secret_key: v.secret_key.clone(),
             diff: v.diff,
             origins: v.origins.clone(),
-            has_secret: !v.secret_key.is_empty(),
         })
         .collect();
     Json(sites)
@@ -62,51 +62,44 @@ pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
 
 #[derive(Deserialize)]
 pub struct CreateSiteRequest {
-    pub key: String,
     pub diff: u8,
     #[serde(default)]
     pub origins: Vec<String>,
 }
 
-fn gen_secret_key() -> String {
-    let mut buf = [0u8; 32];
+fn gen_hex(len: usize) -> String {
+    let mut buf = vec![0u8; len];
     getrandom::getrandom(&mut buf).expect("随机数生成失败");
     buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn gen_site_key() -> String {
+    format!("pk_{}", gen_hex(12))
+}
+
+fn gen_secret_key() -> String {
+    gen_hex(32)
 }
 
 pub async fn create_site(
     State(state): State<AppState>,
     Json(req): Json<CreateSiteRequest>,
 ) -> Response {
-    if req.key.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "key 不能为空"})),
-        )
-            .into_response();
-    }
-
     let mut config = (*state.config.load_full()).clone();
-    if config.sites.contains_key(&req.key) {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "站点已存在"})),
-        )
-            .into_response();
-    }
 
+    let site_key = gen_site_key();
     let secret_key = gen_secret_key();
     let new_site = crate::config::SiteConfig {
         secret_key: secret_key.clone(),
         diff: req.diff,
         origins: req.origins,
     };
-    crate::db::insert_site(&state.db, &req.key, &new_site);
-    config.sites.insert(req.key.clone(), new_site);
+    crate::db::insert_site(&state.db, &site_key, &new_site);
+    config.sites.insert(site_key.clone(), new_site);
     state.reload_config(config).await;
     (
         StatusCode::CREATED,
-        Json(serde_json::json!({"ok": true, "secret_key": secret_key})),
+        Json(serde_json::json!({"ok": true, "key": site_key, "secret_key": secret_key})),
     )
         .into_response()
 }

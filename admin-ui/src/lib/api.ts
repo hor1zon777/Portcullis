@@ -122,9 +122,9 @@ export interface Stats {
 
 export interface SiteView {
   key: string;
+  secret_key: string;
   diff: number;
   origins: string[];
-  has_secret: boolean;
 }
 
 export interface LogEntry {
@@ -159,10 +159,9 @@ export const api = {
   stats: () => request<Stats>('/stats'),
   listSites: () => request<SiteView[]>('/sites'),
   createSite: (body: {
-    key: string;
     diff: number;
     origins: string[];
-  }) => request<{ ok: boolean; secret_key: string }>('/sites', { method: 'POST', body: JSON.stringify(body) }),
+  }) => request<{ ok: boolean; key: string; secret_key: string }>('/sites', { method: 'POST', body: JSON.stringify(body) }),
   updateSite: (key: string, body: { diff?: number; origins?: string[] }) =>
     request<{ ok: boolean }>(`/sites/${encodeURIComponent(key)}`, {
       method: 'PUT',
