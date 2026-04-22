@@ -68,6 +68,13 @@ pub async fn site_verify(
     if !state.store.mark_token_used(&challenge_id, token_exp) {
         return Ok(fail("token 已被核验过（单次使用）"));
     }
+    {
+        let db = state.db.clone();
+        let cid = challenge_id.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::db::mark_nonce_used(&db, &cid, "token", token_exp);
+        });
+    }
 
     crate::metrics::record_siteverify(true);
     Ok(Json(SiteVerifyResponse {

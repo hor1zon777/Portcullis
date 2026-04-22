@@ -267,7 +267,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/
-ReadWritePaths=/var/log
+ReadWritePaths=/var/log /opt/captcha/data
 
 [Install]
 WantedBy=multi-user.target
@@ -463,8 +463,8 @@ Docker Compose 编排 3 个服务：
 
 ```bash
 # 1. 准备配置文件
-cp captcha.toml.example captcha.toml
-# 编辑 captcha.toml（参考上面的配置说明，记得设置 [admin] 段）
+cp .env.example .env
+# 编辑 .env（参考上面的配置说明，记得设置 [admin] 段）
 
 # 2. 构建并启动
 docker compose up -d --build
@@ -676,7 +676,7 @@ diff = 16  # 从 18 降到 16，耗时 ~1s → ~0.5s
 
 **解决**：
 - 使用负载均衡的 session sticky（按 IP 路由到固定节点）
-- 或等待 v1.1 的 Redis 存储后端
+- 或使用负载均衡的 session sticky（按 IP 路由到固定节点）
 
 ### Q: 配置修改后不生效
 

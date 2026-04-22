@@ -15,6 +15,11 @@ use crate::config::SiteConfig;
 
 pub type Db = Arc<Mutex<Connection>>;
 
+/// 安全获取 DB 锁：mutex 中毒时恢复而非 panic。
+fn lock(db: &Db) -> std::sync::MutexGuard<'_, Connection> {
+    db.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -37,7 +42,7 @@ pub fn open_memory() -> Db {
 // ──────── 迁移 ────────
 
 pub fn migrate(db: &Db) {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS sites (
@@ -83,7 +88,7 @@ pub fn migrate(db: &Db) {
 // ──────── 种子数据 ────────
 
 pub fn seed_sites(db: &Db, sites: &HashMap<String, SiteConfig>) {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     let now = now_ms();
     let mut stmt = conn
         .prepare("INSERT OR IGNORE INTO sites (key, secret_key, diff, origins, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
@@ -98,28 +103,39 @@ pub fn seed_sites(db: &Db, sites: &HashMap<String, SiteConfig>) {
             now,
             now
         ])
-        .ok();
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            0
+        });
     }
 }
 
 pub fn seed_ip_lists(db: &Db, blocked: &[String], allowed: &[String]) {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     let now = now_ms();
     let mut stmt = conn
         .prepare("INSERT OR IGNORE INTO ip_lists (ip_or_cidr, list_type, created_at) VALUES (?1, ?2, ?3)")
         .unwrap();
     for ip in blocked {
-        stmt.execute(params![ip, "blocked", now]).ok();
+        stmt.execute(params![ip, "blocked", now])
+            .unwrap_or_else(|e| {
+                tracing::warn!("DB 写入失败: {e}");
+                0
+            });
     }
     for ip in allowed {
-        stmt.execute(params![ip, "allowed", now]).ok();
+        stmt.execute(params![ip, "allowed", now])
+            .unwrap_or_else(|e| {
+                tracing::warn!("DB 写入失败: {e}");
+                0
+            });
     }
 }
 
 // ──────── 加载 ────────
 
 pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     let mut stmt = conn
         .prepare("SELECT key, secret_key, diff, origins FROM sites")
         .unwrap();
@@ -144,7 +160,7 @@ pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
 }
 
 pub fn load_ip_list(db: &Db, list_type: &str) -> Vec<String> {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     let mut stmt = conn
         .prepare("SELECT ip_or_cidr FROM ip_lists WHERE list_type = ?1")
         .unwrap();
@@ -157,25 +173,28 @@ pub fn load_ip_list(db: &Db, list_type: &str) -> Vec<String> {
 // ──────── 站点 CRUD ────────
 
 pub fn insert_site(db: &Db, key: &str, site: &SiteConfig) {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     let now = now_ms();
     let origins_json = serde_json::to_string(&site.origins).unwrap_or_else(|_| "[]".into());
     conn.execute(
         "INSERT OR REPLACE INTO sites (key, secret_key, diff, origins, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![key, site.secret_key, site.diff, origins_json, now, now],
     )
-    .ok();
+    .unwrap_or_else(|e| { tracing::warn!("DB 写入失败: {e}"); 0 });
 }
 
 pub fn update_site_fields(db: &Db, key: &str, diff: Option<u8>, origins: Option<&[String]>) {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     let now = now_ms();
     if let Some(d) = diff {
         conn.execute(
             "UPDATE sites SET diff = ?1, updated_at = ?2 WHERE key = ?3",
             params![d, now, key],
         )
-        .ok();
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            0
+        });
     }
     if let Some(o) = origins {
         let json = serde_json::to_string(o).unwrap_or_else(|_| "[]".into());
@@ -183,40 +202,52 @@ pub fn update_site_fields(db: &Db, key: &str, diff: Option<u8>, origins: Option<
             "UPDATE sites SET origins = ?1, updated_at = ?2 WHERE key = ?3",
             params![json, now, key],
         )
-        .ok();
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            0
+        });
     }
 }
 
 pub fn delete_site(db: &Db, key: &str) {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     conn.execute("DELETE FROM sites WHERE key = ?1", params![key])
-        .ok();
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            0
+        });
 }
 
 // ──────── IP 名单 ────────
 
 pub fn insert_ip_list(db: &Db, ip: &str, list_type: &str) {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     conn.execute(
         "INSERT OR IGNORE INTO ip_lists (ip_or_cidr, list_type, created_at) VALUES (?1, ?2, ?3)",
         params![ip, list_type, now_ms()],
     )
-    .ok();
+    .unwrap_or_else(|e| {
+        tracing::warn!("DB 写入失败: {e}");
+        0
+    });
 }
 
 pub fn delete_ip_list(db: &Db, ip: &str, list_type: &str) {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     conn.execute(
         "DELETE FROM ip_lists WHERE ip_or_cidr = ?1 AND list_type = ?2",
         params![ip, list_type],
     )
-    .ok();
+    .unwrap_or_else(|e| {
+        tracing::warn!("DB 写入失败: {e}");
+        0
+    });
 }
 
 // ──────── 请求日志 ────────
 
 pub fn insert_log(db: &Db, entry: &LogEntry) {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     conn.execute(
         "INSERT INTO request_log (timestamp, ip, site_key, nonce, success, duration_ms, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
@@ -229,11 +260,11 @@ pub fn insert_log(db: &Db, entry: &LogEntry) {
             entry.error,
         ],
     )
-    .ok();
+    .unwrap_or_else(|e| { tracing::warn!("DB 写入失败: {e}"); 0 });
 }
 
 pub fn load_recent_logs(db: &Db, limit: usize) -> Vec<LogEntry> {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     let mut stmt = conn
         .prepare("SELECT timestamp, ip, site_key, nonce, success, duration_ms, error FROM request_log ORDER BY id DESC LIMIT ?1")
         .unwrap();
@@ -256,18 +287,21 @@ pub fn load_recent_logs(db: &Db, limit: usize) -> Vec<LogEntry> {
 
 pub fn cleanup_old_logs(db: &Db, retention_days: u64) {
     let cutoff = now_ms() - (retention_days as i64 * 86_400_000);
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     conn.execute(
         "DELETE FROM request_log WHERE timestamp < ?1",
         params![cutoff],
     )
-    .ok();
+    .unwrap_or_else(|e| {
+        tracing::warn!("DB 写入失败: {e}");
+        0
+    });
 }
 
 // ──────── 防重放 ────────
 
 pub fn mark_nonce_used(db: &Db, id: &str, kind: &str, expires_ms: u64) -> bool {
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     let result = conn.execute(
         "INSERT OR IGNORE INTO replay_nonces (id, kind, expires_ms) VALUES (?1, ?2, ?3)",
         params![id, kind, expires_ms as i64],
@@ -277,12 +311,15 @@ pub fn mark_nonce_used(db: &Db, id: &str, kind: &str, expires_ms: u64) -> bool {
 
 pub fn cleanup_expired_nonces(db: &Db) {
     let now = now_ms();
-    let conn = db.lock().unwrap();
+    let conn = lock(db);
     conn.execute(
         "DELETE FROM replay_nonces WHERE expires_ms <= ?1",
         params![now],
     )
-    .ok();
+    .unwrap_or_else(|e| {
+        tracing::warn!("DB 写入失败: {e}");
+        0
+    });
 }
 
 #[cfg(test)]

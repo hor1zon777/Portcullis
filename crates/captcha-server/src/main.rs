@@ -108,13 +108,18 @@ async fn main() {
                         last_mtime = Some(mtime);
                         if changed {
                             tracing::info!("检测到配置文件变更，开始热重载...");
-                            let new_cli = Cli {
-                                config: Some(path.clone()),
-                                bind: None,
-                                command: None,
-                            };
-                            let new_cfg = config::Config::load(&new_cli);
-                            bg_state.reload_config(new_cfg).await;
+                            let result = std::panic::catch_unwind(|| {
+                                let new_cli = Cli {
+                                    config: Some(path.clone()),
+                                    bind: None,
+                                    command: None,
+                                };
+                                config::Config::load(&new_cli)
+                            });
+                            match result {
+                                Ok(new_cfg) => bg_state.reload_config(new_cfg).await,
+                                Err(_) => tracing::error!("配置文件解析失败，跳过此次热重载"),
+                            }
                         }
                     }
                 }

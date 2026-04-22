@@ -73,8 +73,8 @@ jobs:
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/captcha-server dist/
-          cp captcha.toml.example dist/
-          cp README.md LICENSE 2>/dev/null || true
+          cp .env.example dist/
+          cp README.md LICENSE dist/
           tar czf captcha-server-${{ matrix.target }}.tar.gz -C dist .
 
       - name: Package (Windows)
@@ -82,7 +82,8 @@ jobs:
         run: |
           mkdir dist
           cp target/${{ matrix.target }}/release/captcha-server.exe dist/
-          cp captcha.toml.example dist/
+          cp .env.example dist/
+          cp README.md, LICENSE dist/
           Compress-Archive -Path dist/* -DestinationPath captcha-server-${{ matrix.target }}.zip
 
       - uses: actions/upload-artifact@v4

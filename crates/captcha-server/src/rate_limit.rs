@@ -36,6 +36,12 @@ impl IpRateLimiter {
     }
 
     fn check(&self, ip: IpAddr) -> bool {
+        // 容量保护：超过 50K IP 时清理（令牌桶满的条目可安全移除）
+        if self.limiters.len() > 50_000 {
+            let before = self.limiters.len();
+            self.limiters.retain(|_, limiter| limiter.check().is_err());
+            tracing::debug!("限流器清理：{} → {}", before, self.limiters.len());
+        }
         let limiter = self
             .limiters
             .entry(ip)

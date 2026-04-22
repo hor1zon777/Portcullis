@@ -2,6 +2,7 @@ use axum::extract::Query;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use subtle::ConstantTimeEq;
 
 #[derive(serde::Deserialize)]
 pub struct TokenQuery {
@@ -28,12 +29,18 @@ pub async fn auth_middleware(
             .map(|s| s.to_string())
     });
 
-    match provided {
-        Some(t) if t == expected => next.run(request).await,
-        _ => (
+    let matches = match &provided {
+        Some(t) if t.len() == expected.len() => t.as_bytes().ct_eq(expected.as_bytes()).into(),
+        _ => false,
+    };
+
+    if matches {
+        next.run(request).await
+    } else {
+        (
             StatusCode::UNAUTHORIZED,
             axum::Json(serde_json::json!({"error": "未授权，请提供正确的 admin token"})),
         )
-            .into_response(),
+            .into_response()
     }
 }

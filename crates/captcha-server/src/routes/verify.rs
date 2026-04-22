@@ -101,6 +101,15 @@ async fn do_verify(
     {
         return Err(AppError::Conflict("挑战已被使用".to_string()));
     }
+    // 同步写入 DB 防重放（重启后仍有效）
+    {
+        let db = state.db.clone();
+        let id = req.challenge.id.clone();
+        let exp = req.challenge.exp;
+        tokio::task::spawn_blocking(move || {
+            crate::db::mark_nonce_used(&db, &id, "challenge", exp);
+        });
+    }
 
     if !pow::verify_solution(&req.challenge, req.nonce) {
         return Err(AppError::BadRequest("PoW 解答不满足难度要求".to_string()));
