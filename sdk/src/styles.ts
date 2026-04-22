@@ -130,7 +130,7 @@ export const WIDGET_CSS = `
   white-space: nowrap;
 }
 .powc-brand-ver {
-  font-size: 8px;
+  font-size: 9px;
   opacity: 0.7;
   line-height: 1;
 }
