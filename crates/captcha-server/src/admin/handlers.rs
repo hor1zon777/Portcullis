@@ -1,16 +1,10 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
-
-const DASHBOARD_HTML: &str = include_str!("dashboard.html");
-
-pub async fn dashboard_page() -> Html<&'static str> {
-    Html(DASHBOARD_HTML)
-}
 
 // ──────── GET /admin/api/stats ────────
 

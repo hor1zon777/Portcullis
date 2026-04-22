@@ -1,13 +1,13 @@
 services:
-  captcha:
-    build: .
-    image: pow-captcha:latest
-    container_name: pow-captcha
-    ports:
-      - "8787:8787"
+  captcha-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["--config", "/etc/captcha/captcha.toml"]
     volumes:
       - ./captcha.toml:/etc/captcha/captcha.toml:ro
-    command: ["--config", "/etc/captcha/captcha.toml"]
+    expose:
+      - "8787"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "/captcha-server", "healthcheck", "127.0.0.1:8787"]
@@ -15,3 +15,22 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  admin-ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+    expose:
+      - "80"
+    restart: unless-stopped
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - captcha-server
+      - admin-ui
+    restart: unless-stopped

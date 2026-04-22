@@ -2,5 +2,7 @@
 /sdk/node_modules
 /sdk/dist
 /sdk/pkg
+/admin-ui/node_modules
+/admin-ui/dist
 *.wasm
 captcha.toml

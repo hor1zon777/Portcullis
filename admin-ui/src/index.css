@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900;
+  }
+  * {
+    @apply border-border;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
+  }
+  .btn-primary {
+    @apply bg-primary text-primary-foreground hover:bg-primary/90;
+  }
+  .btn-secondary {
+    @apply bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border;
+  }
+  .btn-destructive {
+    @apply bg-destructive text-destructive-foreground hover:bg-destructive/90;
+  }
+  .btn-sm {
+    @apply px-3 py-1 text-xs;
+  }
+  .card {
+    @apply rounded-lg border border-border bg-card p-6 shadow-sm;
+  }
+  .input {
+    @apply flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+  }
+  .table-base {
+    @apply w-full border-collapse text-sm;
+  }
+  .table-base th {
+    @apply text-left px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider border-b border-border bg-muted/30;
+  }
+  .table-base td {
+    @apply px-3 py-2 border-b border-border;
+  }
+  .table-base tr:hover td {
+    @apply bg-muted/30;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+  .badge-success {
+    @apply bg-green-100 text-green-800;
+  }
+  .badge-fail {
+    @apply bg-red-100 text-red-800;
+  }
+  .badge-muted {
+    @apply bg-gray-100 text-gray-700;
+  }
+}

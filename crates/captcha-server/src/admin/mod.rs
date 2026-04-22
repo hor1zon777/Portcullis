@@ -2,14 +2,14 @@ pub mod auth;
 pub mod handlers;
 pub mod request_log;
 
+use axum::response::Redirect;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 
 use crate::state::AppState;
 
 pub fn admin_router(state: AppState, token: String) -> Router {
-    Router::new()
-        .route("/admin", get(handlers::dashboard_page))
+    let api = Router::new()
         .route("/admin/api/stats", get(handlers::stats))
         .route("/admin/api/sites", get(handlers::list_sites))
         .route("/admin/api/sites", post(handlers::create_site))
@@ -29,5 +29,14 @@ pub fn admin_router(state: AppState, token: String) -> Router {
                     auth::auth_middleware(query, headers, req, next).await
                 }
             },
-        ))
+        ));
+
+    // /admin 页面由 admin-ui 容器（Nginx）提供；
+    // 单二进制部署时重定向到提示页
+    let fallback = Router::new().route(
+        "/admin",
+        get(|| async { Redirect::temporary("/admin/") }),
+    );
+
+    fallback.merge(api)
 }
