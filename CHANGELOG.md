@@ -1,6 +1,6 @@
 # Changelog
 
-## [未发布] — SDK 加固 Tier 1 + Tier 2
+## [1.2.0] — 2026-04-23 — SDK 加固 Tier 1 + Tier 2
 
 基于主站接入方提出的加固建议（`docs/CAPTCHA_SDK_HARDENING.md`），分两档实施。**全部向后兼容**：旧 `/sdk/*file` 路径保留不变；Tier 2 签名 opt-in，不配置密钥时行为与 Tier 1 一致。
 
