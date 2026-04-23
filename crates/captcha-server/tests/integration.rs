@@ -72,6 +72,15 @@ async fn post_raw(app: &axum::Router, path: &str, body: serde_json::Value) -> St
     app.clone().oneshot(req).await.unwrap().status()
 }
 
+async fn get_full(app: &axum::Router, path: &str) -> axum::http::Response<Body> {
+    let req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .body(Body::empty())
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap()
+}
+
 #[derive(serde::Deserialize, Debug)]
 struct ChallengeResp {
     success: bool,
@@ -265,4 +274,122 @@ async fn healthz() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+// ───────────── SDK 加固 Tier 1 ─────────────
+
+fn router() -> axum::Router {
+    build_router(
+        AppState::new(test_config(), captcha_server::db::open_memory()),
+        None,
+        None,
+    )
+}
+
+/// 若 SDK 构建产物缺失，rust-embed 会内嵌空集合，/sdk 相关测试不具备有效前提，跳过。
+fn sdk_assets_available() -> bool {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../sdk/dist/pow-captcha.js")
+        .exists()
+}
+
+#[tokio::test]
+async fn sdk_manifest_json() {
+    if !sdk_assets_available() {
+        eprintln!("sdk/dist/pow-captcha.js 不存在，跳过");
+        return;
+    }
+    let app = router();
+    let res = get_full(&app, "/sdk/manifest.json").await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let ct = res.headers().get("content-type").unwrap().to_str().unwrap();
+    assert!(ct.starts_with("application/json"), "content-type={ct}");
+
+    let corp = res
+        .headers()
+        .get("cross-origin-resource-policy")
+        .expect("CORP 头缺失");
+    assert_eq!(corp.to_str().unwrap(), "cross-origin");
+
+    let cache = res.headers().get("cache-control").unwrap().to_str().unwrap();
+    assert!(cache.contains("max-age=300"), "cache-control={cache}");
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(v["version"].as_str().unwrap(), env!("CARGO_PKG_VERSION"));
+    assert!(v["builtAt"].is_number());
+
+    let art = v["artifacts"].as_object().expect("artifacts 缺失");
+    assert!(art.contains_key("pow-captcha.js"));
+
+    let js = &art["pow-captcha.js"];
+    let integrity = js["integrity"].as_str().unwrap();
+    assert!(
+        integrity.starts_with("sha384-"),
+        "integrity 格式错: {integrity}"
+    );
+    assert!(js["size"].as_u64().unwrap() > 0);
+    assert_eq!(
+        js["url"].as_str().unwrap(),
+        format!("/sdk/v{}/pow-captcha.js", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[tokio::test]
+async fn sdk_versioned_path_current_version() {
+    if !sdk_assets_available() {
+        eprintln!("sdk/dist/pow-captcha.js 不存在，跳过");
+        return;
+    }
+    let app = router();
+    let path = format!("/sdk/v{}/pow-captcha.js", env!("CARGO_PKG_VERSION"));
+    let res = get_full(&app, &path).await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let cache = res.headers().get("cache-control").unwrap().to_str().unwrap();
+    assert!(cache.contains("immutable"), "cache-control={cache}");
+    assert!(cache.contains("31536000"), "cache-control={cache}");
+
+    let corp = res
+        .headers()
+        .get("cross-origin-resource-policy")
+        .expect("CORP 头缺失");
+    assert_eq!(corp.to_str().unwrap(), "cross-origin");
+
+    let etag = res.headers().get("etag");
+    assert!(etag.is_some(), "ETag 缺失");
+}
+
+#[tokio::test]
+async fn sdk_versioned_path_unknown_version_404() {
+    let app = router();
+    let res = get_full(&app, "/sdk/v99.99.99/pow-captcha.js").await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sdk_legacy_path_backward_compatible() {
+    if !sdk_assets_available() {
+        eprintln!("sdk/dist/pow-captcha.js 不存在，跳过");
+        return;
+    }
+    let app = router();
+    let res = get_full(&app, "/sdk/pow-captcha.js").await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let cache = res.headers().get("cache-control").unwrap().to_str().unwrap();
+    assert!(cache.contains("max-age=3600"), "cache-control={cache}");
+    assert!(
+        !cache.contains("immutable"),
+        "旧路径不应使用 immutable: {cache}"
+    );
+}
+
+#[tokio::test]
+async fn sdk_unknown_file_404() {
+    let app = router();
+    let res = get_full(&app, "/sdk/does-not-exist.js").await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }

@@ -1,5 +1,28 @@
 # Changelog
 
+## [未发布] — SDK 加固 Tier 1
+
+基于主站接入方提出的加固建议（`docs/CAPTCHA_SDK_HARDENING.md`），为 SDK 分发增加运行时可验证的 SRI 清单与版本化只读路径。**向后兼容**：旧 `/sdk/*file` 路径保留不变。
+
+### 新增
+- **`GET /sdk/manifest.json`** — 返回 `{version, builtAt, artifacts}`，每个 artifact 含 `url` / `sha384-<base64>` integrity / `size`。主站可据此做 `<script integrity=...>` 加载。
+- **`GET /sdk/v{version}/*file`** — 版本化只读路径，`Cache-Control: public, max-age=31536000, immutable`，版本来自 `CARGO_PKG_VERSION`。
+- **`Cross-Origin-Resource-Policy: cross-origin`** 头加到所有 SDK 资源与 manifest 响应，配合主站启用 COEP 时免手动放通。
+- **SHA-384 integrity** 计算：rust-embed 嵌入字节编译期入 `OnceLock`，与原有 SHA-256 ETag 并存。
+- **`BUILD_TIMESTAMP`** build.rs 环境变量，供 manifest `builtAt` 字段使用。
+
+### 保留
+- `GET /sdk/*file` 原路径照常工作，`Cache-Control: public, max-age=3600`，不带 SRI。升级期主站若命中旧 manifest 可 fallback 到此路径。
+
+### 文档
+- `docs/CAPTCHA_SDK_HARDENING.md`（威胁定义与方案对比）
+- `docs/TIER1_IMPLEMENTATION.md`（实施进度与完成日志、端点清单、主站对接示意）
+
+### 未做（Tier 2，视主站需求再评估）
+- manifest 的 Ed25519 签名 + 管理面板公钥导出 UI
+
+---
+
 ## [1.1.0] — 2026-04-22
 
 **React 管理面板 + Docker Compose 多服务架构。**

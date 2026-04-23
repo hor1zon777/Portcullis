@@ -123,6 +123,69 @@ const widget = PowCaptcha.render('#my-captcha', {
 widget.reset();
 widget.getResponse();
 ```
+
+### 方式 D：带 SRI 的动态加载（推荐用于高敏感业务）
+
+适用场景：主站 `captchaEndpoint` 在运行时可变（例如管理面板配置），无法在构建期写死 `<script integrity=...>`。
+
+先拉 manifest、按清单里的 `integrity` 再注入 `<script>`：
+
+```typescript
+async function loadPortcullis(endpoint: string) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 3000);
+  let manifest: any;
+  try {
+    manifest = await fetch(`${endpoint}/sdk/manifest.json`, {
+      cache: 'no-store',
+      signal: ac.signal,
+    }).then((r) => r.json());
+  } catch {
+    // manifest 拉取失败 → 降级走旧路径（无 SRI）
+    return injectScript(`${endpoint}/sdk/pow-captcha.js`, { crossOrigin: 'anonymous' });
+  } finally {
+    clearTimeout(t);
+  }
+
+  const sdk = manifest.artifacts['pow-captcha.js'];
+  return injectScript(`${endpoint}${sdk.url}`, {
+    integrity: sdk.integrity,
+    crossOrigin: 'anonymous',
+  });
+}
+
+function injectScript(src: string, attrs: Record<string, string> = {}) {
+  return new Promise<void>((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    for (const [k, v] of Object.entries(attrs)) {
+      s.setAttribute(k, v);
+    }
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('SDK 加载失败: ' + src));
+    document.head.appendChild(s);
+  });
+}
+```
+
+**manifest 结构**：
+
+```json
+{
+  "version": "1.1.2",
+  "builtAt": 1745400000,
+  "artifacts": {
+    "pow-captcha.js":       { "url": "/sdk/v1.1.2/pow-captcha.js",       "integrity": "sha384-...", "size": 11284 },
+    "captcha_wasm.js":      { "url": "/sdk/v1.1.2/captcha_wasm.js",      "integrity": "sha384-...", "size": ... },
+    "captcha_wasm_bg.wasm": { "url": "/sdk/v1.1.2/captcha_wasm_bg.wasm", "integrity": "sha384-...", "size": ... }
+  }
+}
+```
+
+**注意事项**：
+- 版本化路径 `/sdk/v{version}/*` 使用 `Cache-Control: immutable`，浏览器可长期缓存
+- Portcullis 升级后旧版本字节从二进制消失，旧版本路径整体 404；主站应对 manifest 做短缓存（默认响应已设 `max-age=300`）
+- 当前 manifest **不带签名**；威胁模型依赖 HTTPS + HSTS 保护传输层完整性。若需进一步的应用层签名，关注 Tier 2 进展（`docs/CAPTCHA_SDK_HARDENING.md`）
   });
 </script>
 ```
