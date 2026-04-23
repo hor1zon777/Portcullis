@@ -153,6 +153,15 @@ export interface RiskData {
   allowed: string[];
 }
 
+export interface ManifestPubkey {
+  /** 是否已配置 manifest 签名私钥 */
+  enabled: boolean;
+  /** base64 编码的 32 字节 Ed25519 公钥；未启用时 undefined */
+  pubkey?: string;
+  /** 签名算法，固定 "ed25519" */
+  algorithm: string;
+}
+
 // ──────── API 调用 ────────
 
 export const api = {
@@ -175,4 +184,5 @@ export const api = {
     request<{ ok: boolean }>('/risk/block', { method: 'POST', body: JSON.stringify({ ip }) }),
   unblockIp: (ip: string) =>
     request<{ ok: boolean }>('/risk/block', { method: 'DELETE', body: JSON.stringify({ ip }) }),
+  manifestPubkey: () => request<ManifestPubkey>('/manifest-pubkey'),
 };

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Globe, ScrollText, Shield, LogOut, Menu, X, Moon, Sun, Zap,
+  LayoutDashboard, Globe, ScrollText, Shield, KeyRound, LogOut, Menu, X, Moon, Sun, Zap,
 } from 'lucide-react';
 import { getToken, clearToken, onAuthChange } from './lib/api';
 import { cn } from './lib/utils';
@@ -11,12 +11,14 @@ import Dashboard from './pages/Dashboard';
 import Sites from './pages/Sites';
 import Logs from './pages/Logs';
 import Risk from './pages/Risk';
+import Security from './pages/Security';
 
 const NAV = [
   { to: '/', label: '监控', icon: LayoutDashboard },
   { to: '/sites', label: '站点', icon: Globe },
   { to: '/logs', label: '日志', icon: ScrollText },
   { to: '/risk', label: '风控', icon: Shield },
+  { to: '/security', label: '安全', icon: KeyRound },
 ];
 
 function Layout({ children }: { children: React.ReactNode }) {
@@ -92,7 +94,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <div className="mt-auto pt-4 border-t border-border/50 dark:border-gray-800/50">
             <div className="px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
-              <span className="pulse-dot">Portcullis v1.2.1</span>
+              <span className="pulse-dot">Portcullis v1.2.2</span>
             </div>
           </div>
         </nav>
@@ -127,6 +129,7 @@ export default function App() {
         <Route path="/sites" element={<Sites />} />
         <Route path="/logs" element={<Logs />} />
         <Route path="/risk" element={<Risk />} />
+        <Route path="/security" element={<Security />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
