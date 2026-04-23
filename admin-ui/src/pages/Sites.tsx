@@ -39,6 +39,11 @@ const ARGON2_HINTS = {
   p_cost: 'Argon2id 并行度。当前固定为 1（串行模式）',
 };
 
+const BIND_HINTS = {
+  ip: '开启后 /verify 签发的 token 会绑定发放时的 client IP（sha256 前 16 字节）；/siteverify 必须携带 client_ip 且一致。须确保反向代理正确透传 X-Forwarded-For / X-Real-IP。',
+  ua: '开启后 token 绑定发放时的 User-Agent（sha256 前 8 字节）。UA 稳定性弱（浏览器自动升级会变），评估后再开。',
+};
+
 export default function Sites() {
   const qc = useQueryClient();
   const { data: sites, isLoading } = useQuery<SiteView[]>({ queryKey: ['sites'], queryFn: api.listSites, refetchInterval: 10000 });
@@ -48,9 +53,11 @@ export default function Sites() {
   const [editOrigins, setEditOrigins] = useState('');
   const [editMCost, setEditMCost] = useState(19456);
   const [editTCost, setEditTCost] = useState(2);
+  const [editBindIp, setEditBindIp] = useState(false);
+  const [editBindUa, setEditBindUa] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [form, setForm] = useState({ diff: 18, origins: '', m_cost: 19456, t_cost: 2 });
+  const [form, setForm] = useState({ diff: 18, origins: '', m_cost: 19456, t_cost: 2, bind_ip: false, bind_ua: false });
 
   const createMut = useMutation({
     mutationFn: () => api.createSite({
@@ -59,11 +66,13 @@ export default function Sites() {
       argon2_m_cost: form.m_cost,
       argon2_t_cost: form.t_cost,
       argon2_p_cost: 1,
+      bind_token_to_ip: form.bind_ip,
+      bind_token_to_ua: form.bind_ua,
     }),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['sites'] });
       setShowForm(false);
-      setForm({ diff: 18, origins: '', m_cost: 19456, t_cost: 2 });
+      setForm({ diff: 18, origins: '', m_cost: 19456, t_cost: 2, bind_ip: false, bind_ua: false });
       toast.success(`站点 ${data.key} 创建成功`, { duration: 5000 });
     },
     onError: (e) => toast.error('创建失败: ' + (e as Error).message),
@@ -75,6 +84,8 @@ export default function Sites() {
       argon2_m_cost: editMCost,
       argon2_t_cost: editTCost,
       argon2_p_cost: 1,
+      bind_token_to_ip: editBindIp,
+      bind_token_to_ua: editBindUa,
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['sites'] }); setEditKey(null); toast.success('站点已更新'); },
     onError: (e) => toast.error('更新失败: ' + (e as Error).message),
@@ -91,6 +102,8 @@ export default function Sites() {
     setEditOrigins(s.origins.join(', '));
     setEditMCost(s.argon2_m_cost);
     setEditTCost(s.argon2_t_cost);
+    setEditBindIp(s.bind_token_to_ip);
+    setEditBindUa(s.bind_token_to_ua);
   }
   function handleCopy(key: string) { copyToClipboard(key); setCopiedKey(key); setTimeout(() => setCopiedKey(null), 2000); toast.success('已复制 ' + key); }
   const formValid = form.diff >= 8 && form.diff <= 28 && form.m_cost >= 8 && form.m_cost <= 65536 && form.t_cost >= 1 && form.t_cost <= 10;
@@ -123,6 +136,16 @@ export default function Sites() {
               <label className="text-xs font-medium text-muted-foreground inline-flex items-center">t_cost (迭代)<Tooltip text={ARGON2_HINTS.t_cost} /></label>
               <input className="input" type="number" min={1} max={10} value={form.t_cost} onChange={e => setForm({ ...form, t_cost: Number(e.target.value) || 2 })} />
             </div>
+            <div className="md:col-span-2 flex flex-wrap items-center gap-4 pt-1">
+              <label className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground cursor-pointer">
+                <input type="checkbox" checked={form.bind_ip} onChange={e => setForm({ ...form, bind_ip: e.target.checked })} />
+                绑定 client IP<Tooltip text={BIND_HINTS.ip} />
+              </label>
+              <label className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground cursor-pointer">
+                <input type="checkbox" checked={form.bind_ua} onChange={e => setForm({ ...form, bind_ua: e.target.checked })} />
+                绑定 User-Agent<Tooltip text={BIND_HINTS.ua} />
+              </label>
+            </div>
           </div>
           <div className="mt-3 flex gap-2">
             <button type="submit" className="btn btn-primary" disabled={!formValid || createMut.isPending}>{createMut.isPending ? '创建中...' : '确认创建'}</button>
@@ -140,6 +163,7 @@ export default function Sites() {
                 <th>Diff</th>
                 <th className="whitespace-nowrap">m_cost<Tooltip text={ARGON2_HINTS.m_cost} /></th>
                 <th className="whitespace-nowrap">t_cost<Tooltip text={ARGON2_HINTS.t_cost} /></th>
+                <th className="whitespace-nowrap">绑定<Tooltip text="token 绑定 client IP / UA（opt-in）" /></th>
                 <th>Origins</th>
                 <th>操作</th>
               </tr>
@@ -157,12 +181,26 @@ export default function Sites() {
                   <td>{editKey === s.key ? <input className="input w-20" type="number" min={8} max={28} value={editDiff} onChange={e => setEditDiff(Number(e.target.value) || 18)} /> : s.diff}</td>
                   <td>{editKey === s.key ? <input className="input w-24" type="number" min={8} max={65536} value={editMCost} onChange={e => setEditMCost(Number(e.target.value) || 19456)} /> : <span className="font-mono text-xs">{s.argon2_m_cost}</span>}</td>
                   <td>{editKey === s.key ? <input className="input w-16" type="number" min={1} max={10} value={editTCost} onChange={e => setEditTCost(Number(e.target.value) || 2)} /> : <span className="font-mono text-xs">{s.argon2_t_cost}</span>}</td>
+                  <td className="whitespace-nowrap text-xs">
+                    {editKey === s.key ? (
+                      <span className="inline-flex flex-col gap-1">
+                        <label className="inline-flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={editBindIp} onChange={e => setEditBindIp(e.target.checked)} />IP</label>
+                        <label className="inline-flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={editBindUa} onChange={e => setEditBindUa(e.target.checked)} />UA</label>
+                      </span>
+                    ) : (
+                      <span className="font-mono">
+                        {s.bind_token_to_ip ? 'IP' : '—'}
+                        {' / '}
+                        {s.bind_token_to_ua ? 'UA' : '—'}
+                      </span>
+                    )}
+                  </td>
                   <td className="text-xs text-muted-foreground max-w-[200px] truncate" title={s.origins.join(', ')}>{editKey === s.key ? <input className="input" value={editOrigins} onChange={e => setEditOrigins(e.target.value)} /> : s.origins.join(', ') || '(全部)'}</td>
                   <td className="whitespace-nowrap">
                     {editKey === s.key ? (<><button className="btn btn-primary btn-sm mr-1" onClick={() => updateMut.mutate(s.key)} disabled={updateMut.isPending}>保存</button><button className="btn btn-secondary btn-sm" onClick={() => setEditKey(null)}>取消</button></>) : (<><button className="btn btn-secondary btn-sm mr-1" onClick={() => startEdit(s)}><Pencil size={12} /> 编辑</button><button className="btn btn-destructive btn-sm" onClick={() => setDeleteTarget(s.key)}><Trash2 size={12} /> 删除</button></>)}
                   </td>
                 </tr>
-              )) : <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">暂无站点</td></tr>}
+              )) : <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">暂无站点</td></tr>}
             </tbody>
           </table>
         </div>

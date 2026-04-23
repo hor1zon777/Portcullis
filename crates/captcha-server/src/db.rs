@@ -53,6 +53,8 @@ pub fn migrate(db: &Db) {
             argon2_m_cost INTEGER NOT NULL DEFAULT 19456,
             argon2_t_cost INTEGER NOT NULL DEFAULT 2,
             argon2_p_cost INTEGER NOT NULL DEFAULT 1,
+            bind_token_to_ip INTEGER NOT NULL DEFAULT 0,
+            bind_token_to_ua INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
@@ -105,6 +107,12 @@ pub fn migrate(db: &Db) {
         // 列已存在时 ALTER 会报错，静默忽略
         let _ = conn.execute(&sql, []);
     }
+
+    // v1.4.0 增量迁移：为已有 sites 表添加身份绑定开关列
+    for col in ["bind_token_to_ip", "bind_token_to_ua"] {
+        let sql = format!("ALTER TABLE sites ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0");
+        let _ = conn.execute(&sql, []);
+    }
 }
 
 // ──────── 种子数据 ────────
@@ -113,7 +121,7 @@ pub fn seed_sites(db: &Db, sites: &HashMap<String, SiteConfig>) {
     let conn = lock(db);
     let now = now_ms();
     let mut stmt = conn
-        .prepare("INSERT OR IGNORE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
+        .prepare("INSERT OR IGNORE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, bind_token_to_ip, bind_token_to_ua, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)")
         .unwrap();
     for (key, site) in sites {
         let origins_json = serde_json::to_string(&site.origins).unwrap_or_else(|_| "[]".into());
@@ -125,6 +133,8 @@ pub fn seed_sites(db: &Db, sites: &HashMap<String, SiteConfig>) {
             site.argon2_m_cost,
             site.argon2_t_cost,
             site.argon2_p_cost,
+            site.bind_token_to_ip as i32,
+            site.bind_token_to_ua as i32,
             now,
             now
         ])
@@ -162,7 +172,7 @@ pub fn seed_ip_lists(db: &Db, blocked: &[String], allowed: &[String]) {
 pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
     let conn = lock(db);
     let mut stmt = conn
-        .prepare("SELECT key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost FROM sites")
+        .prepare("SELECT key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, bind_token_to_ip, bind_token_to_ua FROM sites")
         .unwrap();
     let rows = stmt
         .query_map([], |row| {
@@ -174,6 +184,8 @@ pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
             let argon2_m_cost: u32 = row.get(4)?;
             let argon2_t_cost: u32 = row.get(5)?;
             let argon2_p_cost: u32 = row.get(6)?;
+            let bind_token_to_ip: i32 = row.get(7)?;
+            let bind_token_to_ua: i32 = row.get(8)?;
             Ok((
                 key,
                 SiteConfig {
@@ -183,6 +195,8 @@ pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
                     argon2_m_cost,
                     argon2_t_cost,
                     argon2_p_cost,
+                    bind_token_to_ip: bind_token_to_ip != 0,
+                    bind_token_to_ua: bind_token_to_ua != 0,
                 },
             ))
         })
@@ -208,8 +222,20 @@ pub fn insert_site(db: &Db, key: &str, site: &SiteConfig) {
     let now = now_ms();
     let origins_json = serde_json::to_string(&site.origins).unwrap_or_else(|_| "[]".into());
     conn.execute(
-        "INSERT OR REPLACE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![key, site.secret_key, site.diff, origins_json, site.argon2_m_cost, site.argon2_t_cost, site.argon2_p_cost, now, now],
+        "INSERT OR REPLACE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, bind_token_to_ip, bind_token_to_ua, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            key,
+            site.secret_key,
+            site.diff,
+            origins_json,
+            site.argon2_m_cost,
+            site.argon2_t_cost,
+            site.argon2_p_cost,
+            site.bind_token_to_ip as i32,
+            site.bind_token_to_ua as i32,
+            now,
+            now
+        ],
     )
     .unwrap_or_else(|e| { tracing::warn!("DB 写入失败: {e}"); 0 });
 }
@@ -222,6 +248,8 @@ pub fn update_site_fields(
     argon2_m_cost: Option<u32>,
     argon2_t_cost: Option<u32>,
     argon2_p_cost: Option<u32>,
+    bind_token_to_ip: Option<bool>,
+    bind_token_to_ua: Option<bool>,
 ) {
     let conn = lock(db);
     let now = now_ms();
@@ -270,6 +298,26 @@ pub fn update_site_fields(
         conn.execute(
             "UPDATE sites SET argon2_p_cost = ?1, updated_at = ?2 WHERE key = ?3",
             params![p, now, key],
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            0
+        });
+    }
+    if let Some(b) = bind_token_to_ip {
+        conn.execute(
+            "UPDATE sites SET bind_token_to_ip = ?1, updated_at = ?2 WHERE key = ?3",
+            params![b as i32, now, key],
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            0
+        });
+    }
+    if let Some(b) = bind_token_to_ua {
+        conn.execute(
+            "UPDATE sites SET bind_token_to_ua = ?1, updated_at = ?2 WHERE key = ?3",
+            params![b as i32, now, key],
         )
         .unwrap_or_else(|e| {
             tracing::warn!("DB 写入失败: {e}");
@@ -456,6 +504,8 @@ mod tests {
                 argon2_m_cost: 19456,
                 argon2_t_cost: 2,
                 argon2_p_cost: 1,
+                bind_token_to_ip: false,
+                bind_token_to_ua: false,
             },
         );
         seed_sites(&db, &sites);
@@ -479,6 +529,8 @@ mod tests {
             argon2_m_cost: 8192,
             argon2_t_cost: 3,
             argon2_p_cost: 1,
+            bind_token_to_ip: false,
+            bind_token_to_ua: false,
         };
         insert_site(&db, "pk_new", &site);
 
@@ -487,11 +539,17 @@ mod tests {
         assert_eq!(loaded["pk_new"].argon2_m_cost, 8192);
         assert_eq!(loaded["pk_new"].argon2_t_cost, 3);
 
-        update_site_fields(&db, "pk_new", Some(20), None, Some(32768), None, None);
+        update_site_fields(&db, "pk_new", Some(20), None, Some(32768), None, None, None, None);
         let loaded = load_sites(&db);
         assert_eq!(loaded["pk_new"].diff, 20);
         assert_eq!(loaded["pk_new"].argon2_m_cost, 32768);
         assert_eq!(loaded["pk_new"].argon2_t_cost, 3);
+
+        // v1.4.0 新增：开关身份绑定
+        update_site_fields(&db, "pk_new", None, None, None, None, None, Some(true), Some(true));
+        let loaded = load_sites(&db);
+        assert!(loaded["pk_new"].bind_token_to_ip);
+        assert!(loaded["pk_new"].bind_token_to_ua);
 
         delete_site(&db, "pk_new");
         assert!(load_sites(&db).is_empty());

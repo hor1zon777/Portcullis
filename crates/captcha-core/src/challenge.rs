@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn sign_bytes_include_pow_params() {
-        let mut ch1 = sample_challenge();
+        let ch1 = sample_challenge();
         let mut ch2 = sample_challenge();
         ch2.m_cost = 8192;
         assert_ne!(ch1.to_sign_bytes(), ch2.to_sign_bytes());

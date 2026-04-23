@@ -24,6 +24,8 @@ fn test_config() -> Config {
             argon2_m_cost: captcha_core::challenge::LEGACY_M_COST,
             argon2_t_cost: captcha_core::challenge::LEGACY_T_COST,
             argon2_p_cost: captcha_core::challenge::LEGACY_P_COST,
+            bind_token_to_ip: false,
+            bind_token_to_ua: false,
         },
     );
 
@@ -812,6 +814,8 @@ fn test_config_with_custom_argon2() -> Config {
             argon2_m_cost: 32768,
             argon2_t_cost: 2,
             argon2_p_cost: 1,
+            bind_token_to_ip: false,
+            bind_token_to_ua: false,
         },
     );
     cfg
@@ -893,4 +897,400 @@ async fn legacy_json_fallback_default_params() {
     assert_eq!(ch.m_cost, captcha_core::challenge::LEGACY_M_COST);
     assert_eq!(ch.t_cost, captcha_core::challenge::LEGACY_T_COST);
     assert_eq!(ch.p_cost, captcha_core::challenge::LEGACY_P_COST);
+}
+
+// ───────────── v1.4.0 CaptchaToken 客户端身份绑定 ─────────────
+
+async fn post_json_hdr<T: DeserializeOwned>(
+    app: &axum::Router,
+    path: &str,
+    body: serde_json::Value,
+    extra_headers: &[(&str, &str)],
+) -> (StatusCode, T) {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json");
+    for (k, v) in extra_headers {
+        builder = builder.header(*k, *v);
+    }
+    let req = builder
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let parsed: T = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+        panic!("解析响应失败: {e}, body={}", String::from_utf8_lossy(&bytes))
+    });
+    (status, parsed)
+}
+
+fn test_config_with_ip_binding() -> Config {
+    let mut cfg = test_config();
+    if let Some(site) = cfg.sites.get_mut("pk_test") {
+        site.bind_token_to_ip = true;
+    }
+    cfg
+}
+
+fn test_config_with_ua_binding() -> Config {
+    let mut cfg = test_config();
+    if let Some(site) = cfg.sites.get_mut("pk_test") {
+        site.bind_token_to_ua = true;
+    }
+    cfg
+}
+
+fn test_config_with_both_bindings() -> Config {
+    let mut cfg = test_config();
+    if let Some(site) = cfg.sites.get_mut("pk_test") {
+        site.bind_token_to_ip = true;
+        site.bind_token_to_ua = true;
+    }
+    cfg
+}
+
+/// E2E：IP 绑定开启 → /verify 带 XFF → /siteverify 带同 IP → 通过
+#[tokio::test]
+async fn e2e_ip_binding_matches() {
+    let app = build_router(
+        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (_, ch): (_, ChallengeResp) = post_json_hdr(
+        &app,
+        "/api/v1/challenge",
+        json!({ "site_key": "pk_test" }),
+        &[("x-forwarded-for", "203.0.113.5")],
+    )
+    .await;
+
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+
+    let (status, v): (_, VerifyResp) = post_json_hdr(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+        &[("x-forwarded-for", "203.0.113.5")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": v.captcha_token,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+            "client_ip": "203.0.113.5",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(sv.success);
+}
+
+/// IP 绑定开启 → 发放时来自 A IP → /siteverify 报 B IP → 拒绝
+#[tokio::test]
+async fn ip_binding_mismatch_rejected() {
+    let app = build_router(
+        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (_, ch): (_, ChallengeResp) = post_json_hdr(
+        &app,
+        "/api/v1/challenge",
+        json!({ "site_key": "pk_test" }),
+        &[("x-forwarded-for", "203.0.113.5")],
+    )
+    .await;
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+    let (_, v): (_, VerifyResp) = post_json_hdr(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+        &[("x-forwarded-for", "203.0.113.5")],
+    )
+    .await;
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": v.captcha_token,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+            "client_ip": "198.51.100.9",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!sv.success, "IP 不匹配应当被拒绝");
+    assert!(sv.error.is_some());
+}
+
+/// IP 绑定开启 → /siteverify 未提供 client_ip → 拒绝
+#[tokio::test]
+async fn ip_binding_missing_client_ip_rejected() {
+    let app = build_router(
+        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (_, ch): (_, ChallengeResp) = post_json_hdr(
+        &app,
+        "/api/v1/challenge",
+        json!({ "site_key": "pk_test" }),
+        &[("x-forwarded-for", "203.0.113.5")],
+    )
+    .await;
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+    let (_, v): (_, VerifyResp) = post_json_hdr(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+        &[("x-forwarded-for", "203.0.113.5")],
+    )
+    .await;
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": v.captcha_token,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!sv.success);
+    assert!(sv
+        .error
+        .as_deref()
+        .unwrap_or("")
+        .contains("IP 绑定"));
+}
+
+/// IP 绑定开启 → /verify 无法识别 IP → 400
+#[tokio::test]
+async fn ip_binding_missing_ip_at_verify_rejected() {
+    let app = build_router(
+        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    // /challenge 不强制要求 IP，但 /verify 需要；用不带 XFF 的请求
+    let (_, ch): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+
+    let status = post_raw(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+    )
+    .await;
+    // 本测试在 oneshot 模式下 ConnectInfo 不可用，也无 XFF，应返回 400
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// E2E：UA 绑定开启 → /verify 带 UA → /siteverify 带同 UA → 通过
+#[tokio::test]
+async fn e2e_ua_binding_matches() {
+    let app = build_router(
+        AppState::new(test_config_with_ua_binding(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let ua = "Mozilla/5.0 (X11; Linux x86_64) TestUA/1.0";
+    let (_, ch): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+
+    let (_, v): (_, VerifyResp) = post_json_hdr(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+        &[("user-agent", ua)],
+    )
+    .await;
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": v.captcha_token,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+            "user_agent": ua,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(sv.success);
+}
+
+/// UA 绑定开启 → siteverify 缺失 user_agent → 拒绝
+#[tokio::test]
+async fn ua_binding_missing_rejected() {
+    let app = build_router(
+        AppState::new(test_config_with_ua_binding(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let ua = "Mozilla/5.0 TestUA";
+    let (_, ch): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+    let (_, v): (_, VerifyResp) = post_json_hdr(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+        &[("user-agent", ua)],
+    )
+    .await;
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": v.captcha_token,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!sv.success);
+    assert!(sv
+        .error
+        .as_deref()
+        .unwrap_or("")
+        .contains("UA 绑定"));
+}
+
+/// IP + UA 双绑定 → 全部匹配 → 通过
+#[tokio::test]
+async fn e2e_ip_and_ua_binding_both_match() {
+    let app = build_router(
+        AppState::new(test_config_with_both_bindings(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let ua = "Mozilla/5.0 DualBind";
+    let (_, ch): (_, ChallengeResp) = post_json_hdr(
+        &app,
+        "/api/v1/challenge",
+        json!({ "site_key": "pk_test" }),
+        &[("x-forwarded-for", "10.0.0.1"), ("user-agent", ua)],
+    )
+    .await;
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+    let (_, v): (_, VerifyResp) = post_json_hdr(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+        &[("x-forwarded-for", "10.0.0.1"), ("user-agent", ua)],
+    )
+    .await;
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": v.captcha_token,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+            "client_ip": "10.0.0.1",
+            "user_agent": ua,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(sv.success);
+}
+
+/// 未启用绑定的 site（默认）→ token 不含 hash → siteverify 传入 client_ip/user_agent 被忽略
+#[tokio::test]
+async fn no_binding_extra_fields_ignored() {
+    let app = build_router(
+        AppState::new(test_config(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (_, ch): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+    let (_, v): (_, VerifyResp) = post_json(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+    )
+    .await;
+
+    // 传入乱七八糟的 client_ip / user_agent，应当被忽略
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": v.captcha_token,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+            "client_ip": "1.2.3.4",
+            "user_agent": "Totally-Different-UA",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(sv.success, "未绑定的 site 不应该因 client_ip/UA 不一致而失败");
+}
+
+/// 非法 client_ip 字符串 → 绑定的 site 应当返回失败并给出明确 error
+#[tokio::test]
+async fn ip_binding_invalid_client_ip_rejected() {
+    let app = build_router(
+        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (_, ch): (_, ChallengeResp) = post_json_hdr(
+        &app,
+        "/api/v1/challenge",
+        json!({ "site_key": "pk_test" }),
+        &[("x-forwarded-for", "203.0.113.5")],
+    )
+    .await;
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+    let (_, v): (_, VerifyResp) = post_json_hdr(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+        &[("x-forwarded-for", "203.0.113.5")],
+    )
+    .await;
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": v.captcha_token,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+            "client_ip": "not-an-ip",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!sv.success);
+    assert!(sv
+        .error
+        .as_deref()
+        .unwrap_or("")
+        .contains("client_ip"));
 }

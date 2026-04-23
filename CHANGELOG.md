@@ -1,5 +1,62 @@
 # Changelog
 
+## [1.4.0] — 2026-04-24 — CaptchaToken 客户端身份绑定（opt-in）
+
+**目标**：阻断「一台机器批量解 PoW → 分发到多 IP / 多账号使用」的跨机器复用攻击。攻击者若批量算好 token 再下发给僵尸网络使用，绑定后的 token 在 `/siteverify` 阶段会因 IP/UA 不一致被直接拒绝。
+
+### 设计取舍（默认关闭）
+
+Portcullis 卖点之一是「自托管不收集用户数据」。引入 IP/UA hash 语义上扩展了数据使用面，所以:
+
+- 每站点 **默认关闭**，管理员评估后 opt-in
+- hash **只进 token**（不写 DB、不写日志）
+- `ip_hash` = SHA-256(client_ip.to_string())[0..16]（128 bits），`ua_hash` = SHA-256(user_agent)[0..8]（64 bits）
+- token 到期自动清理（`token_ttl_secs`，默认 300s）
+
+### 新增
+
+- **Token payload 扩展**（`captcha-server/src/token.rs`）
+  - `Payload.ip_hash` / `ua_hash`：`#[serde(default, skip_serializing_if = "Option::is_none")]`，未绑定时不进 payload，保持紧凑。
+  - `VerifiedToken` 结构取代旧的 tuple 返回；`verify_full()` 暴露完整 hash 字段。
+  - `hash_ip(&IpAddr)` / `hash_ua(&str)` / `ip_hash_eq` / `ua_hash_eq` 辅助函数（`ct_eq` 常数时间比较）。
+  - `IpAddr::to_string` 规范化 IPv4/IPv6（IPv6 小写压缩零段），保证 verify 与 siteverify 阶段 hash 一致。
+- **SiteConfig 开关**（`config.rs`）
+  - `bind_token_to_ip: bool`（默认 `false`）
+  - `bind_token_to_ua: bool`（默认 `false`）
+  - TOML `[[sites]]` 段对应 `Option<bool>`，未写 = 关闭
+- **verify handler**：按 site 开关从 `X-Forwarded-For` / `X-Real-IP` 提取 IP、从 `User-Agent` 提取 UA，算 hash 填入 token。IP 绑定启用但无法识别 client IP 时直接返回 `400`（明确告知运维检查反代配置）。
+- **siteverify handler**：请求体新增 optional `client_ip` / `user_agent`。仅当 **token 自身携带 hash** 时强制比对——管理员即使热切换关闭绑定，之前发出的 token 仍按发放时策略校验，不会因此静默放过。`client_ip` 解析失败返回明确错误。
+- **管理面板 Sites 页**：表格加一列「绑定」显示 `IP / UA` 状态；编辑面板两个 checkbox 开关；创建表单同理；Tooltip 提示反代透传要求。
+- **集成测试**（9 个新用例）
+  - `e2e_ip_binding_matches` / `ip_binding_mismatch_rejected` / `ip_binding_missing_client_ip_rejected` / `ip_binding_missing_ip_at_verify_rejected` / `ip_binding_invalid_client_ip_rejected`
+  - `e2e_ua_binding_matches` / `ua_binding_missing_rejected`
+  - `e2e_ip_and_ua_binding_both_match`
+  - `no_binding_extra_fields_ignored`（默认站点忽略额外字段，兼容 v1.3.x 主站）
+- **token 单元测试**（12 个新用例）
+  - roundtrip（无绑定 / IP / UA）、过期 / 篡改 / 错密钥 / 非法 hash 长度
+  - `ipv6_canonicalization_consistent`（不同 IPv6 表示 → 同一 hash）
+  - `legacy_token_without_hash_fields_still_parses`（v1.3.x token 向后兼容）
+- **`docs/DEPLOY.md` §5.6 / §7.1 / §7.2 / FAQ 新条目**
+  - 业务后端 `client_ip / user_agent` 传参示例（Node.js + Python）
+  - Nginx / Caddy / Apache / Traefik 反代 `X-Forwarded-For` 配置
+  - 多层代理 XFF 伪造防范与 CDN 私有头建议
+  - 启用后流量全挂的排查步骤、UA 漂移规避、隐私权衡
+
+### 变更
+
+- **`token::generate` 签名变更**：多两个 `Option<[u8; N]>` 参数。`token::verify` / `verify_with_exp` 删除，调用方改用 `token::verify_full()` 返回 `VerifiedToken`。
+- **`db::update_site_fields`** 多两个 `Option<bool>` 参数。
+- **DB schema 增量迁移**：`ALTER TABLE sites ADD COLUMN bind_token_to_ip/ua INTEGER NOT NULL DEFAULT 0`（幂等）。
+- **所有 crate / SDK / admin-ui 版本号** 统一升级到 1.4.0。
+
+### 破坏性
+
+- **`/api/v1/siteverify` 请求体新增字段**：对未启用绑定的站点完全向后兼容（新字段默认 None 被忽略）；启用绑定的站点必须更新业务后端 siteverify 调用代码。
+- **`token` 模块 Rust API 变更**（`generate` 增参、`verify` 重命名）。`captcha-server` crate 作为二进制发布，下游不应直接依赖；如有例外需要适配。
+- DB schema 与 v1.3.x 向后兼容：旧二进制忽略多出的两列，回滚无阻力。
+
+---
+
 ## [1.3.0] — 2026-04-24 — PoW 参数下发化
 
 **目标**：把 Argon2id 参数从「编译期硬编码」改为「逐 challenge 下发 + HMAC 签名覆盖」，中和 v1.2.5 未能清除的 WASM crate 版本号泄漏（`argon2-0.5.3/src/params.rs`）的攻击价值——即使攻击者知道算法版本，也无法通过枚举预计算，因为每站点每 challenge 参数都可不同。

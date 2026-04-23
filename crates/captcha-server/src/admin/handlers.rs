@@ -47,6 +47,8 @@ pub struct SiteView {
     argon2_m_cost: u32,
     argon2_t_cost: u32,
     argon2_p_cost: u32,
+    bind_token_to_ip: bool,
+    bind_token_to_ua: bool,
 }
 
 pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
@@ -62,6 +64,8 @@ pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
             argon2_m_cost: v.argon2_m_cost,
             argon2_t_cost: v.argon2_t_cost,
             argon2_p_cost: v.argon2_p_cost,
+            bind_token_to_ip: v.bind_token_to_ip,
+            bind_token_to_ua: v.bind_token_to_ua,
         })
         .collect();
     Json(sites)
@@ -77,6 +81,8 @@ pub struct CreateSiteRequest {
     pub argon2_m_cost: Option<u32>,
     pub argon2_t_cost: Option<u32>,
     pub argon2_p_cost: Option<u32>,
+    pub bind_token_to_ip: Option<bool>,
+    pub bind_token_to_ua: Option<bool>,
 }
 
 fn gen_hex(len: usize) -> String {
@@ -114,6 +120,8 @@ pub async fn create_site(
         argon2_p_cost: req
             .argon2_p_cost
             .unwrap_or(captcha_core::challenge::DEFAULT_P_COST),
+        bind_token_to_ip: req.bind_token_to_ip.unwrap_or(false),
+        bind_token_to_ua: req.bind_token_to_ua.unwrap_or(false),
     };
     if let Err(e) = new_site.validate_argon2_params() {
         return (
@@ -158,6 +166,8 @@ pub struct UpdateSiteRequest {
     pub argon2_m_cost: Option<u32>,
     pub argon2_t_cost: Option<u32>,
     pub argon2_p_cost: Option<u32>,
+    pub bind_token_to_ip: Option<bool>,
+    pub bind_token_to_ua: Option<bool>,
 }
 
 pub async fn update_site(
@@ -188,6 +198,12 @@ pub async fn update_site(
     if let Some(p) = req.argon2_p_cost {
         site.argon2_p_cost = p;
     }
+    if let Some(b) = req.bind_token_to_ip {
+        site.bind_token_to_ip = b;
+    }
+    if let Some(b) = req.bind_token_to_ua {
+        site.bind_token_to_ua = b;
+    }
     if let Err(e) = site.validate_argon2_params() {
         return (
             StatusCode::BAD_REQUEST,
@@ -203,6 +219,8 @@ pub async fn update_site(
         req.argon2_m_cost,
         req.argon2_t_cost,
         req.argon2_p_cost,
+        req.bind_token_to_ip,
+        req.bind_token_to_ua,
     );
     state.reload_config(config).await;
     Json(serde_json::json!({"ok": true})).into_response()

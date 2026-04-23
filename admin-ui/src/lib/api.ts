@@ -128,6 +128,8 @@ export interface SiteView {
   argon2_m_cost: number;
   argon2_t_cost: number;
   argon2_p_cost: number;
+  bind_token_to_ip: boolean;
+  bind_token_to_ua: boolean;
 }
 
 export interface LogEntry {
@@ -184,8 +186,10 @@ export const api = {
     argon2_m_cost?: number;
     argon2_t_cost?: number;
     argon2_p_cost?: number;
+    bind_token_to_ip?: boolean;
+    bind_token_to_ua?: boolean;
   }) => request<{ ok: boolean; key: string; secret_key: string }>('/sites', { method: 'POST', body: JSON.stringify(body) }),
-  updateSite: (key: string, body: { diff?: number; origins?: string[]; argon2_m_cost?: number; argon2_t_cost?: number; argon2_p_cost?: number }) =>
+  updateSite: (key: string, body: { diff?: number; origins?: string[]; argon2_m_cost?: number; argon2_t_cost?: number; argon2_p_cost?: number; bind_token_to_ip?: boolean; bind_token_to_ua?: boolean }) =>
     request<{ ok: boolean }>(`/sites/${encodeURIComponent(key)}`, {
       method: 'PUT',
       body: JSON.stringify(body),

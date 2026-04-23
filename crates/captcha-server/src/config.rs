@@ -79,6 +79,10 @@ struct SiteSection {
     argon2_m_cost: Option<u32>,
     argon2_t_cost: Option<u32>,
     argon2_p_cost: Option<u32>,
+    /// v1.4.0：发放 token 时绑定 client IP 的 SHA-256[:16]
+    bind_token_to_ip: Option<bool>,
+    /// v1.4.0：发放 token 时绑定 User-Agent 的 SHA-256[:8]
+    bind_token_to_ua: Option<bool>,
 }
 
 // ───────────── 运行时配置 ─────────────
@@ -105,6 +109,14 @@ pub struct SiteConfig {
     pub argon2_t_cost: u32,
     #[serde(default = "default_p_cost")]
     pub argon2_p_cost: u32,
+    /// v1.4.0：opt-in 将 token 绑定到发放时的 client IP。默认 false，保持
+    /// 「不收集用户数据」的定位。hash 仅进 token，不落 DB / 日志。
+    #[serde(default)]
+    pub bind_token_to_ip: bool,
+    /// v1.4.0：opt-in 将 token 绑定到发放时的 User-Agent。UA 稳定性弱于 IP，
+    /// 浏览器更新可能导致请求失败；评估后再开。
+    #[serde(default)]
+    pub bind_token_to_ua: bool,
 }
 
 impl SiteConfig {
@@ -200,6 +212,8 @@ impl Config {
                     argon2_p_cost: site
                         .argon2_p_cost
                         .unwrap_or(captcha_core::challenge::DEFAULT_P_COST),
+                    bind_token_to_ip: site.bind_token_to_ip.unwrap_or(false),
+                    bind_token_to_ua: site.bind_token_to_ua.unwrap_or(false),
                 };
                 if let Err(e) = sc.validate_argon2_params() {
                     panic!("站点 '{}' Argon2 参数无效: {e}", site.key);
@@ -332,6 +346,9 @@ origins = ["https://example.com"]
 # argon2_m_cost = 19456  # KiB，范围 [8, 65536]
 # argon2_t_cost = 2      # 迭代次数，范围 [1, 10]
 # argon2_p_cost = 1      # 并行度，固定为 1
+# v1.4.0 CaptchaToken 身份绑定（opt-in，默认关闭）
+# bind_token_to_ip = false  # 启用后 token 绑定发放时的 client IP
+# bind_token_to_ua = false  # 启用后 token 绑定发放时的 User-Agent
 
 [risk]
 dynamic_diff_enabled = true

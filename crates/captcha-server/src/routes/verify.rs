@@ -115,11 +115,44 @@ async fn do_verify(
         return Err(AppError::BadRequest("PoW 解答不满足难度要求".to_string()));
     }
 
+    // v1.4.0 身份绑定：按 site 开关在 token 里填入 IP / UA hash。
+    // 未开启的 site 行为与 v1.3.x 完全一致，hash 字段不进 payload。
+    let (ip_hash, ua_hash) = {
+        let site = config.get_site(&req.challenge.site_key);
+        let bind_ip = site.map(|s| s.bind_token_to_ip).unwrap_or(false);
+        let bind_ua = site.map(|s| s.bind_token_to_ua).unwrap_or(false);
+        let ip_hash = if bind_ip {
+            match extract_ip(headers, None) {
+                Some(ip) => Some(token::hash_ip(&ip)),
+                None => {
+                    return Err(AppError::BadRequest(
+                        "站点启用了 IP 绑定，但无法识别 client IP（检查反向代理 X-Forwarded-For / X-Real-IP 透传）"
+                            .to_string(),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        let ua_hash = if bind_ua {
+            let ua = headers
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            Some(token::hash_ua(ua))
+        } else {
+            None
+        };
+        (ip_hash, ua_hash)
+    };
+
     let (ct_token, exp) = token::generate(
         &req.challenge.id,
         &req.challenge.site_key,
         config.token_ttl_secs,
         &config.secret,
+        ip_hash,
+        ua_hash,
     );
 
     tracing::info!(

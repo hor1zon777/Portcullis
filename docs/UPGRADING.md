@@ -1,8 +1,76 @@
 # 升级指南
 
-> 最新版本：**v1.3.0**（PoW 参数下发化）
+> 最新版本：**v1.4.0**（CaptchaToken 客户端身份绑定 opt-in）
 
 PoW CAPTCHA 的核心算法由客户端 WASM 与服务端共同执行，因此在 v1.2.x 之前**客户端与服务端必须编译自同一套 Argon2 参数**。v1.3.0 起，参数从 `challenge` 下发并由 HMAC 签名覆盖，客户端只需根据 challenge 内容动态构建 Argon2 实例，升级耦合大幅降低。
+
+---
+
+## v1.3.x → v1.4.0
+
+### 1. 核心改动
+
+| 变化 | 含义 |
+|------|------|
+| Token payload 新增 `ip_hash` / `ua_hash` | 可选字段（`skip_serializing_if`），未绑定时不进 payload |
+| `SiteConfig.bind_token_to_ip / bind_token_to_ua` | 新增两个 bool 开关，默认 false |
+| `/api/v1/siteverify` 新增字段 | 请求体 optional `client_ip` / `user_agent` |
+| `token` 模块 Rust API 变更 | `generate` 多两个参数；`verify` / `verify_with_exp` 合并为 `verify_full` → 返回 `VerifiedToken` |
+| DB schema 增量迁移 | `ALTER TABLE sites ADD COLUMN bind_token_to_ip/ua INTEGER NOT NULL DEFAULT 0`（幂等） |
+
+### 2. 向后兼容性
+
+- **外部 `/api/v1/*` 完全兼容**：对未启用绑定的站点，主站不需要任何改动。
+- **未启用绑定的站点**：siteverify 即使传入 `client_ip` / `user_agent` 也被忽略（token 内无 hash 时不比对），方便业务后端统一调用代码。
+- **v1.3.x 发出的 token**：payload 无 `ip_hash` / `ua_hash` 字段，v1.4 服务端用 `serde(default)` 解析为 `None`，视为未绑定；正常通过。
+- **DB schema 回滚兼容**：v1.4 新增的两列被 v1.3.x 代码忽略，回滚无阻力。
+
+### 3. 升级步骤
+
+#### 默认场景（不启用绑定）
+
+仅需替换二进制 / 镜像：
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+不需要修改主站后端代码，行为与 v1.3.x 完全一致。
+
+#### 启用 `bind_token_to_ip` 的场景
+
+1. **先升级 Portcullis 服务端和 SDK**（原子替换 Docker 镜像即可）
+2. **更新主站业务后端**，给 siteverify 传 `client_ip`：
+
+   ```javascript
+   body: JSON.stringify({
+     token: captcha_token,
+     secret_key: process.env.CAPTCHA_SECRET_KEY,
+     client_ip: req.ip,  // 确保 Express 已 app.set('trust proxy', true)
+   }),
+   ```
+
+3. **确认反代层透传真实 IP**（见 `docs/DEPLOY.md` §7.1 的 Nginx / Caddy / Apache / Traefik 示例）
+4. **在管理面板「站点」页开启对应站点的「绑定 IP」checkbox**
+
+上面 2、3 步骤必须先于 4，否则启用瞬间所有 siteverify 都会返回失败。
+
+#### 启用 `bind_token_to_ua` 的场景
+
+同 IP 绑定流程，替换 `client_ip` 为 `user_agent` 字段。**建议搭配短 `token_ttl_secs`**（60-120 秒），避免浏览器自动升级导致 UA 漂移。
+
+### 4. 回滚到 v1.3.x
+
+- 回滚前：在管理面板关闭所有绑定开关，并等待 `token_ttl_secs` 让已发出的 token 过期
+- 回滚：切换镜像 / 二进制，v1.3.x 代码忽略 DB 中新增的两列
+- 已发出的 v1.4 token（payload 含 `ip_hash`）在 v1.3.x 上会被当作普通 token 通过，不会因此失败
+
+### 5. 隐私权衡提醒
+
+启用后 hash 只进 token、不落 DB / 日志，token 到期自动清理。仍然建议：
+- 仅对**高风险**场景（注册、支付确认、大额提现）启用绑定
+- 对登录这种高频场景评估误杀率后再决定
+- 出境数据合规要求严格的场景保持默认关闭
 
 ---
 

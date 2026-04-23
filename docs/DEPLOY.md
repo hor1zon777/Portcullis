@@ -440,6 +440,47 @@ async def login(req: dict):
 3. **设置超时** — 给 siteverify 请求 3-5 秒超时
 4. **失败时拒绝** — 网络错误也要拒绝请求（fail-closed）
 
+### 5.6 v1.4.0：启用身份绑定时的额外字段
+
+当对应 site 开启了 `bind_token_to_ip` / `bind_token_to_ua` 后，业务后端调用 `/siteverify` **必须**同步传入 `client_ip` / `user_agent`，服务端会和 token 里绑定的 hash 比对：
+
+```javascript
+// Node.js 示例：绑定 IP + UA 时
+const r = await fetch('https://captcha.example.com/api/v1/siteverify', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    token: captcha_token,
+    secret_key: process.env.CAPTCHA_SECRET_KEY,
+    // v1.4.0：从当前请求头提取，再透传
+    client_ip: req.ip,                       // Express 需 app.set('trust proxy', true)
+    user_agent: req.headers['user-agent'],
+  }),
+});
+```
+
+```python
+# FastAPI 示例
+client_ip = request.client.host  # 或从 X-Forwarded-For 自行提取
+ua = request.headers.get("user-agent", "")
+async with httpx.AsyncClient(timeout=5) as c:
+    r = await c.post(
+        f"{CAPTCHA_ENDPOINT}/api/v1/siteverify",
+        json={
+            "token": req["captcha_token"],
+            "secret_key": CAPTCHA_SECRET_KEY,
+            "client_ip": client_ip,
+            "user_agent": ua,
+        },
+    )
+```
+
+校验规则：
+- token 发放时没绑定 → `/siteverify` 不传 `client_ip / user_agent` 也通过（与 v1.3.x 一致）
+- token 发放时绑定了 IP → `/siteverify` 必须传 `client_ip` 且与 token 匹配，否则 `success: false`
+- token 发放时绑定了 UA → `/siteverify` 必须传 `user_agent` 且与 token 匹配，否则 `success: false`
+- **即使管理员中途关掉绑定，之前发出的 token 仍按发放时的策略强制校验**，避免热切换导致用户流量意外通过
+
 ---
 
 ## 六、Docker 部署
@@ -544,6 +585,88 @@ server {
 ```
 
 **注意**：使用反向代理时，确保 `X-Forwarded-For` 和 `X-Real-IP` 头被正确传递，否则 IP 限流和动态难度无法工作。
+
+### 7.1 v1.4.0：启用 `bind_token_to_ip` 时的强制要求
+
+当站点开启了 IP 绑定（`bind_token_to_ip = true`），反向代理**必须**正确透传客户端真实 IP，否则：
+- `/verify` 发放 token 时服务端识别不到真实 IP，直接返回 **400**
+- 即使绕过了 /verify，siteverify 用的是代理自己的 IP → 每个请求都不匹配 → 流量全挂
+
+服务端提取 IP 的顺序：`X-Forwarded-For`（首段） → `X-Real-IP` → TCP 连接源地址。
+
+**Nginx（已在 §七 示例中包含）：**
+
+```nginx
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+**Caddy：**
+
+```caddyfile
+captcha.example.com {
+    reverse_proxy 127.0.0.1:8787 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+    }
+}
+```
+
+Caddy 默认会自动设置 `X-Forwarded-For`，这里显式写出是为了让配置意图明确。
+
+**Apache httpd 2.4+：**
+
+```apache
+<VirtualHost *:443>
+    ServerName captcha.example.com
+
+    ProxyPass        / http://127.0.0.1:8787/
+    ProxyPassReverse / http://127.0.0.1:8787/
+
+    # 启用后端见到真实 IP
+    ProxyPreserveHost On
+    RemoteIPHeader X-Forwarded-For
+    RequestHeader set X-Real-IP "%{REMOTE_ADDR}s"
+
+    # 启用 mod_remoteip + mod_headers
+    # a2enmod remoteip headers
+</VirtualHost>
+```
+
+**Traefik（动态配置）：**
+
+```yaml
+http:
+  middlewares:
+    captcha-forward:
+      headers:
+        customRequestHeaders:
+          X-Real-IP: ""  # 由 Traefik 自动计算
+  routers:
+    captcha:
+      rule: "Host(`captcha.example.com`)"
+      middlewares: [captcha-forward]
+      service: captcha-backend
+```
+
+Traefik / Envoy / ALB 等现代代理默认会写入 `X-Forwarded-For`，通常无需额外配置；但若在多层代理链路中，要让每一层都按序追加而非覆盖。
+
+### 7.2 多层反向代理的 IP 信任问题
+
+`X-Forwarded-For` 是可写头，任何能直连最外层入口的客户端都能伪造 XFF。若你的架构为 `client → LB → cache → captcha-server`，每一层都会 append IP，最终服务端看到：
+
+```
+X-Forwarded-For: <客户端伪造>, <真实客户端 IP>, <LB 出口 IP>, <cache 出口 IP>
+```
+
+当前 `extract_ip` 取的是**第一段**，因此如果有恶意客户端直接写 `X-Forwarded-For: 1.2.3.4` 提交请求，就会污染服务端识别。
+
+**缓解方法**：
+- 入口代理（nginx/LB）显式**覆盖**而非追加 XFF：`proxy_set_header X-Forwarded-For $remote_addr;`
+- 或者在入口代理层删掉客户端自带的 XFF，只写入真实连接地址
+- 若有 CDN（Cloudflare 等），改用 CDN 私有的头（`CF-Connecting-IP` 等），并在 captcha-server 前一跳做归一化
+
+如果链路不受信任，**不要启用 `bind_token_to_ip`** —— 攻击者同样可以伪造 XFF 发放 → 复用 token。
 
 ---
 
@@ -704,3 +827,33 @@ Windows PowerShell 需要用 `.\` 而非 `./`，且需要完整路径：
 ### Q: 如何升级 Argon2 参数
 
 参见 [UPGRADING.md](UPGRADING.md)。**必须同时重新构建 WASM 和服务端**，灰度发布。
+
+### Q: v1.4.0 启用 `bind_token_to_ip` 后，请求全部失败 "token 要求 IP 绑定..."
+
+**原因**：反向代理没有透传客户端真实 IP。排查步骤：
+
+1. 服务端直连（不走代理）`curl -H "X-Forwarded-For: 1.2.3.4" ...` 能通过说明服务端本身工作正常
+2. 在代理层上加日志看 `$remote_addr` 与 `$proxy_add_x_forwarded_for` 是否存在
+3. 确认 §7.1 的代理配置已加入且 reload
+
+**快速回滚**：管理面板关闭对应 site 的「绑定 IP」开关，立即生效。之前发出的 token 仍会强制校验，但新发出的不再绑定。
+
+### Q: v1.4.0 `bind_token_to_ua` 偶尔失败
+
+**原因**：UA 会随浏览器自动升级变化（Chrome 新版本、Safari 小版本等），或在同一会话内主站 SPA 内部更换请求库。
+
+**建议**：
+- 仅对 **一次性敏感操作**（重要支付确认）启用 UA 绑定
+- 登录/注册这类场景 token 可能跨会话存活几分钟，避免启用 UA 绑定
+- 配合短 `token_ttl_secs`（例如 60-120 秒）降低 UA 漂移概率
+
+### Q: 启用身份绑定后的隐私权衡
+
+Portcullis 定位「自托管不收集用户数据」，hash 本身即可在一定程度上避免明文 IP/UA 存储：
+
+- **只进 token**（不落 DB、不落日志）
+- token 有 `exp` 限制，到期即被 SQLite/内存双 store 自动清理
+- `ip_hash` 是 SHA-256 前 16 字节 = 128 bits，足以唯一标识单个 IPv4，但同时攻击者即使拿到 token 明文也只能反推自己的 IP（即公开信息）
+- `ua_hash` 是 SHA-256 前 8 字节 = 64 bits，碰撞概率可控（常见 UA 种类 ≈ 10^6）
+
+**默认关闭**，各站点按实际合规要求 opt-in。
