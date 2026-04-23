@@ -100,7 +100,8 @@ struct StepResult {
 }
 
 /// 创建 Solver 实例。
-/// 一次性完成 Argon2 base hash 计算（~100ms），后续 `step()` 只跑 SHA-256。
+/// 一次性完成 Argon2 base hash 计算，后续 `step()` 只跑 SHA-256。
+/// v1.3.0+：Argon2 参数从 challenge.m_cost/t_cost/p_cost 读取。
 #[wasm_bindgen]
 pub fn create_solver(payload_json: &str, hard_limit: u64) -> Result<Solver, JsError> {
     let payload: ChallengePayload = serde_json::from_str(payload_json)

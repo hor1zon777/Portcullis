@@ -125,6 +125,9 @@ export interface SiteView {
   secret_key: string;
   diff: number;
   origins: string[];
+  argon2_m_cost: number;
+  argon2_t_cost: number;
+  argon2_p_cost: number;
 }
 
 export interface LogEntry {
@@ -178,8 +181,11 @@ export const api = {
   createSite: (body: {
     diff: number;
     origins: string[];
+    argon2_m_cost?: number;
+    argon2_t_cost?: number;
+    argon2_p_cost?: number;
   }) => request<{ ok: boolean; key: string; secret_key: string }>('/sites', { method: 'POST', body: JSON.stringify(body) }),
-  updateSite: (key: string, body: { diff?: number; origins?: string[] }) =>
+  updateSite: (key: string, body: { diff?: number; origins?: string[]; argon2_m_cost?: number; argon2_t_cost?: number; argon2_p_cost?: number }) =>
     request<{ ok: boolean }>(`/sites/${encodeURIComponent(key)}`, {
       method: 'PUT',
       body: JSON.stringify(body),

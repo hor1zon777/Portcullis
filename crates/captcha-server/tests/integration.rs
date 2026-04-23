@@ -20,8 +20,10 @@ fn test_config() -> Config {
         SiteConfig {
             secret_key: "sk_test_secret_at_least_16_bytes".to_string(),
             diff: 8,
-            // origins 留空，测试客户端不发 Origin header，避免 CORS/Origin 拦截
             origins: vec![],
+            argon2_m_cost: captcha_core::challenge::LEGACY_M_COST,
+            argon2_t_cost: captcha_core::challenge::LEGACY_T_COST,
+            argon2_p_cost: captcha_core::challenge::LEGACY_P_COST,
         },
     );
 
@@ -722,4 +724,173 @@ async fn admin_revoke_manifest_key() {
     let bytes = to_bytes(res2.into_body(), usize::MAX).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["removed"], false);
+}
+
+// ───────────── v1.3.0 PoW 参数下发化 ─────────────
+
+#[tokio::test]
+async fn challenge_contains_argon2_params() {
+    let app = build_router(
+        AppState::new(test_config(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (status, ch): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(ch.success);
+
+    // test_config 使用 LEGACY 参数 4096/1/1
+    assert_eq!(ch.challenge.m_cost, 4096);
+    assert_eq!(ch.challenge.t_cost, 1);
+    assert_eq!(ch.challenge.p_cost, 1);
+}
+
+#[tokio::test]
+async fn challenge_params_covered_by_signature() {
+    let app = build_router(
+        AppState::new(test_config(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (_, ch): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+
+    // 篡改 m_cost 后提交 verify，签名应失败
+    let mut tampered = ch.challenge.clone();
+    tampered.m_cost = 65536;
+
+    let status = post_raw(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": tampered, "sig": ch.sig, "nonce": 0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "篡改 m_cost 应导致签名验证失败");
+}
+
+#[tokio::test]
+async fn challenge_tampered_t_cost_rejected() {
+    let app = build_router(
+        AppState::new(test_config(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (_, ch): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+
+    let mut tampered = ch.challenge.clone();
+    tampered.t_cost = 10;
+
+    let status = post_raw(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": tampered, "sig": ch.sig, "nonce": 0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "篡改 t_cost 应导致签名验证失败");
+}
+
+fn test_config_with_custom_argon2() -> Config {
+    let mut cfg = test_config();
+    // pk_test 使用自定义参数
+    if let Some(site) = cfg.sites.get_mut("pk_test") {
+        site.argon2_m_cost = 8192;
+        site.argon2_t_cost = 3;
+        site.argon2_p_cost = 1;
+    }
+    // 添加第二个站点使用不同参数
+    cfg.sites.insert(
+        "pk_site2".to_string(),
+        SiteConfig {
+            secret_key: "sk_site2_secret_key_16b".to_string(),
+            diff: 8,
+            origins: vec![],
+            argon2_m_cost: 32768,
+            argon2_t_cost: 2,
+            argon2_p_cost: 1,
+        },
+    );
+    cfg
+}
+
+#[tokio::test]
+async fn different_sites_different_argon2_params() {
+    let cfg = test_config_with_custom_argon2();
+    let app = build_router(
+        AppState::new(cfg, captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    // pk_test 应返回 8192/3/1
+    let (_, ch1): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+    assert_eq!(ch1.challenge.m_cost, 8192);
+    assert_eq!(ch1.challenge.t_cost, 3);
+    assert_eq!(ch1.challenge.p_cost, 1);
+
+    // pk_site2 应返回 32768/2/1
+    let (_, ch2): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_site2" })).await;
+    assert_eq!(ch2.challenge.m_cost, 32768);
+    assert_eq!(ch2.challenge.t_cost, 2);
+    assert_eq!(ch2.challenge.p_cost, 1);
+}
+
+#[tokio::test]
+async fn e2e_with_custom_argon2_params() {
+    let cfg = test_config_with_custom_argon2();
+    let app = build_router(
+        AppState::new(cfg, captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (status, ch): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ch.challenge.m_cost, 8192);
+    assert_eq!(ch.challenge.t_cost, 3);
+
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+
+    let (status, v): (_, VerifyResp) = post_json(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(v.success);
+    assert!(!v.captcha_token.is_empty());
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({ "token": v.captcha_token, "secret_key": "sk_test_secret_at_least_16_bytes" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(sv.success);
+}
+
+#[tokio::test]
+async fn legacy_json_fallback_default_params() {
+    // 模拟旧客户端发来不含 m/t/p 的 challenge JSON
+    let legacy_json = r#"{
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "salt": "AQIDBAUGBwgJCgsMDQ4PEA==",
+        "diff": 8,
+        "exp": 99999999999999,
+        "site_key": "pk_test"
+    }"#;
+
+    let ch: captcha_core::challenge::Challenge = serde_json::from_str(legacy_json).unwrap();
+    assert_eq!(ch.m_cost, captcha_core::challenge::LEGACY_M_COST);
+    assert_eq!(ch.t_cost, captcha_core::challenge::LEGACY_T_COST);
+    assert_eq!(ch.p_cost, captcha_core::challenge::LEGACY_P_COST);
 }

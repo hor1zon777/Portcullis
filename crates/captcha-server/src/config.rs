@@ -8,6 +8,13 @@ use serde::Deserialize;
 
 use crate::risk::RiskConfig;
 
+/// Argon2 参数校验范围
+pub const ARGON2_M_COST_MIN: u32 = 8;
+pub const ARGON2_M_COST_MAX: u32 = 65536;
+pub const ARGON2_T_COST_MIN: u32 = 1;
+pub const ARGON2_T_COST_MAX: u32 = 10;
+pub const ARGON2_P_COST_FIXED: u32 = 1;
+
 #[derive(Parser)]
 #[command(name = "captcha-server", version, about = "PoW CAPTCHA 验证服务")]
 pub struct Cli {
@@ -69,9 +76,22 @@ struct SiteSection {
     diff: u8,
     #[serde(default)]
     origins: Vec<String>,
+    argon2_m_cost: Option<u32>,
+    argon2_t_cost: Option<u32>,
+    argon2_p_cost: Option<u32>,
 }
 
 // ───────────── 运行时配置 ─────────────
+
+fn default_m_cost() -> u32 {
+    captcha_core::challenge::DEFAULT_M_COST
+}
+fn default_t_cost() -> u32 {
+    captcha_core::challenge::DEFAULT_T_COST
+}
+fn default_p_cost() -> u32 {
+    captcha_core::challenge::DEFAULT_P_COST
+}
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct SiteConfig {
@@ -79,6 +99,36 @@ pub struct SiteConfig {
     pub diff: u8,
     #[serde(default)]
     pub origins: Vec<String>,
+    #[serde(default = "default_m_cost")]
+    pub argon2_m_cost: u32,
+    #[serde(default = "default_t_cost")]
+    pub argon2_t_cost: u32,
+    #[serde(default = "default_p_cost")]
+    pub argon2_p_cost: u32,
+}
+
+impl SiteConfig {
+    pub fn validate_argon2_params(&self) -> Result<(), String> {
+        if self.argon2_m_cost < ARGON2_M_COST_MIN || self.argon2_m_cost > ARGON2_M_COST_MAX {
+            return Err(format!(
+                "argon2_m_cost 必须在 [{}, {}] 范围内，当前 {}",
+                ARGON2_M_COST_MIN, ARGON2_M_COST_MAX, self.argon2_m_cost
+            ));
+        }
+        if self.argon2_t_cost < ARGON2_T_COST_MIN || self.argon2_t_cost > ARGON2_T_COST_MAX {
+            return Err(format!(
+                "argon2_t_cost 必须在 [{}, {}] 范围内，当前 {}",
+                ARGON2_T_COST_MIN, ARGON2_T_COST_MAX, self.argon2_t_cost
+            ));
+        }
+        if self.argon2_p_cost != ARGON2_P_COST_FIXED {
+            return Err(format!(
+                "argon2_p_cost 必须为 {}（串行场景），当前 {}",
+                ARGON2_P_COST_FIXED, self.argon2_p_cost
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -137,14 +187,24 @@ impl Config {
         } else {
             let mut map = HashMap::new();
             for site in toml_sites {
-                map.insert(
-                    site.key,
-                    SiteConfig {
-                        secret_key: site.secret_key,
-                        diff: site.diff,
-                        origins: site.origins,
-                    },
-                );
+                let sc = SiteConfig {
+                    secret_key: site.secret_key,
+                    diff: site.diff,
+                    origins: site.origins,
+                    argon2_m_cost: site
+                        .argon2_m_cost
+                        .unwrap_or(captcha_core::challenge::DEFAULT_M_COST),
+                    argon2_t_cost: site
+                        .argon2_t_cost
+                        .unwrap_or(captcha_core::challenge::DEFAULT_T_COST),
+                    argon2_p_cost: site
+                        .argon2_p_cost
+                        .unwrap_or(captcha_core::challenge::DEFAULT_P_COST),
+                };
+                if let Err(e) = sc.validate_argon2_params() {
+                    panic!("站点 '{}' Argon2 参数无效: {e}", site.key);
+                }
+                map.insert(site.key, sc);
             }
             map
         };
@@ -268,6 +328,10 @@ key = "pk_example"
 secret_key = "sk_example_change_me_min16"
 diff = 18
 origins = ["https://example.com"]
+# Argon2id 参数（可选，默认 OWASP 2024 推荐值）
+# argon2_m_cost = 19456  # KiB，范围 [8, 65536]
+# argon2_t_cost = 2      # 迭代次数，范围 [1, 10]
+# argon2_p_cost = 1      # 并行度，固定为 1
 
 [risk]
 dynamic_diff_enabled = true

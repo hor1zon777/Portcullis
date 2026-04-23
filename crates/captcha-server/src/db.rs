@@ -50,6 +50,9 @@ pub fn migrate(db: &Db) {
             secret_key TEXT    NOT NULL,
             diff       INTEGER NOT NULL DEFAULT 18,
             origins    TEXT    NOT NULL DEFAULT '[]',
+            argon2_m_cost INTEGER NOT NULL DEFAULT 19456,
+            argon2_t_cost INTEGER NOT NULL DEFAULT 2,
+            argon2_p_cost INTEGER NOT NULL DEFAULT 1,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
@@ -89,6 +92,19 @@ pub fn migrate(db: &Db) {
         ",
     )
     .expect("数据库迁移失败");
+
+    // v1.3.0 增量迁移：为已有 sites 表添加 Argon2 参数列
+    for (col, default) in [
+        ("argon2_m_cost", "19456"),
+        ("argon2_t_cost", "2"),
+        ("argon2_p_cost", "1"),
+    ] {
+        let sql = format!(
+            "ALTER TABLE sites ADD COLUMN {col} INTEGER NOT NULL DEFAULT {default}"
+        );
+        // 列已存在时 ALTER 会报错，静默忽略
+        let _ = conn.execute(&sql, []);
+    }
 }
 
 // ──────── 种子数据 ────────
@@ -97,7 +113,7 @@ pub fn seed_sites(db: &Db, sites: &HashMap<String, SiteConfig>) {
     let conn = lock(db);
     let now = now_ms();
     let mut stmt = conn
-        .prepare("INSERT OR IGNORE INTO sites (key, secret_key, diff, origins, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
+        .prepare("INSERT OR IGNORE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
         .unwrap();
     for (key, site) in sites {
         let origins_json = serde_json::to_string(&site.origins).unwrap_or_else(|_| "[]".into());
@@ -106,6 +122,9 @@ pub fn seed_sites(db: &Db, sites: &HashMap<String, SiteConfig>) {
             site.secret_key,
             site.diff,
             origins_json,
+            site.argon2_m_cost,
+            site.argon2_t_cost,
+            site.argon2_p_cost,
             now,
             now
         ])
@@ -143,7 +162,7 @@ pub fn seed_ip_lists(db: &Db, blocked: &[String], allowed: &[String]) {
 pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
     let conn = lock(db);
     let mut stmt = conn
-        .prepare("SELECT key, secret_key, diff, origins FROM sites")
+        .prepare("SELECT key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost FROM sites")
         .unwrap();
     let rows = stmt
         .query_map([], |row| {
@@ -152,12 +171,18 @@ pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
             let diff: u8 = row.get(2)?;
             let origins_json: String = row.get(3)?;
             let origins: Vec<String> = serde_json::from_str(&origins_json).unwrap_or_default();
+            let argon2_m_cost: u32 = row.get(4)?;
+            let argon2_t_cost: u32 = row.get(5)?;
+            let argon2_p_cost: u32 = row.get(6)?;
             Ok((
                 key,
                 SiteConfig {
                     secret_key,
                     diff,
                     origins,
+                    argon2_m_cost,
+                    argon2_t_cost,
+                    argon2_p_cost,
                 },
             ))
         })
@@ -183,13 +208,21 @@ pub fn insert_site(db: &Db, key: &str, site: &SiteConfig) {
     let now = now_ms();
     let origins_json = serde_json::to_string(&site.origins).unwrap_or_else(|_| "[]".into());
     conn.execute(
-        "INSERT OR REPLACE INTO sites (key, secret_key, diff, origins, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![key, site.secret_key, site.diff, origins_json, now, now],
+        "INSERT OR REPLACE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![key, site.secret_key, site.diff, origins_json, site.argon2_m_cost, site.argon2_t_cost, site.argon2_p_cost, now, now],
     )
     .unwrap_or_else(|e| { tracing::warn!("DB 写入失败: {e}"); 0 });
 }
 
-pub fn update_site_fields(db: &Db, key: &str, diff: Option<u8>, origins: Option<&[String]>) {
+pub fn update_site_fields(
+    db: &Db,
+    key: &str,
+    diff: Option<u8>,
+    origins: Option<&[String]>,
+    argon2_m_cost: Option<u32>,
+    argon2_t_cost: Option<u32>,
+    argon2_p_cost: Option<u32>,
+) {
     let conn = lock(db);
     let now = now_ms();
     if let Some(d) = diff {
@@ -207,6 +240,36 @@ pub fn update_site_fields(db: &Db, key: &str, diff: Option<u8>, origins: Option<
         conn.execute(
             "UPDATE sites SET origins = ?1, updated_at = ?2 WHERE key = ?3",
             params![json, now, key],
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            0
+        });
+    }
+    if let Some(m) = argon2_m_cost {
+        conn.execute(
+            "UPDATE sites SET argon2_m_cost = ?1, updated_at = ?2 WHERE key = ?3",
+            params![m, now, key],
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            0
+        });
+    }
+    if let Some(t) = argon2_t_cost {
+        conn.execute(
+            "UPDATE sites SET argon2_t_cost = ?1, updated_at = ?2 WHERE key = ?3",
+            params![t, now, key],
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            0
+        });
+    }
+    if let Some(p) = argon2_p_cost {
+        conn.execute(
+            "UPDATE sites SET argon2_p_cost = ?1, updated_at = ?2 WHERE key = ?3",
+            params![p, now, key],
         )
         .unwrap_or_else(|e| {
             tracing::warn!("DB 写入失败: {e}");
@@ -390,6 +453,9 @@ mod tests {
                 secret_key: "sk_1234567890123456".to_string(),
                 diff: 18,
                 origins: vec!["https://example.com".to_string()],
+                argon2_m_cost: 19456,
+                argon2_t_cost: 2,
+                argon2_p_cost: 1,
             },
         );
         seed_sites(&db, &sites);
@@ -397,6 +463,8 @@ mod tests {
         let loaded = load_sites(&db);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded["pk_test"].diff, 18);
+        assert_eq!(loaded["pk_test"].argon2_m_cost, 19456);
+        assert_eq!(loaded["pk_test"].argon2_t_cost, 2);
     }
 
     #[test]
@@ -408,15 +476,22 @@ mod tests {
             secret_key: "sk_abcdef1234567890".to_string(),
             diff: 16,
             origins: vec![],
+            argon2_m_cost: 8192,
+            argon2_t_cost: 3,
+            argon2_p_cost: 1,
         };
         insert_site(&db, "pk_new", &site);
 
         let loaded = load_sites(&db);
         assert_eq!(loaded["pk_new"].diff, 16);
+        assert_eq!(loaded["pk_new"].argon2_m_cost, 8192);
+        assert_eq!(loaded["pk_new"].argon2_t_cost, 3);
 
-        update_site_fields(&db, "pk_new", Some(20), None);
+        update_site_fields(&db, "pk_new", Some(20), None, Some(32768), None, None);
         let loaded = load_sites(&db);
         assert_eq!(loaded["pk_new"].diff, 20);
+        assert_eq!(loaded["pk_new"].argon2_m_cost, 32768);
+        assert_eq!(loaded["pk_new"].argon2_t_cost, 3);
 
         delete_site(&db, "pk_new");
         assert!(load_sites(&db).is_empty());

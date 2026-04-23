@@ -94,6 +94,9 @@ pub async fn create(
         diff: effective_diff,
         exp: now_ms + config.challenge_ttl_secs * 1000,
         site_key: req.site_key,
+        m_cost: site.argon2_m_cost,
+        t_cost: site.argon2_t_cost,
+        p_cost: site.argon2_p_cost,
     };
 
     let sig_bytes = crypto::sign(&challenge.to_sign_bytes(), &config.secret);

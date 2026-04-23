@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.3.0] — 2026-04-24 — PoW 参数下发化
+
+**目标**：把 Argon2id 参数从「编译期硬编码」改为「逐 challenge 下发 + HMAC 签名覆盖」，中和 v1.2.5 未能清除的 WASM crate 版本号泄漏（`argon2-0.5.3/src/params.rs`）的攻击价值——即使攻击者知道算法版本，也无法通过枚举预计算，因为每站点每 challenge 参数都可不同。
+
+### 新增
+
+- **Challenge 扩展 `m_cost / t_cost / p_cost` 字段**（`captcha-core/src/challenge.rs`）
+  - `to_sign_bytes()` 纳入三个参数（`... | m_cost_le(4) | t_cost_le(4) | p_cost_le(4)`），HMAC 签名覆盖，篡改即在 `/api/v1/verify` 返回 `401`。
+  - `#[serde(default)]` 让旧版本客户端产生的 JSON（无新字段）反序列化时自动回填 `4096/1/1`，不破坏滚动升级期流量。
+  - 新常量：`LEGACY_M_COST=4096 / LEGACY_T_COST=1 / LEGACY_P_COST=1`（兼容回填）、`DEFAULT_M_COST=19456 / DEFAULT_T_COST=2 / DEFAULT_P_COST=1`（OWASP 2024 Argon2id 第二档，新建站点默认值）。
+- **`SiteConfig` 每站点可配参数**：新增 `argon2_m_cost / argon2_t_cost / argon2_p_cost`，TOML 段 `[[sites]]` 可选字段。启动时 `validate_argon2_params()` 校验范围，越界 panic（明确失败优于静默误配）。
+- **管理面板「站点」页新增参数列**：`m_cost / t_cost` 内联编辑，含 Tooltip 说明（耗时参考表）。`POST /admin/api/sites` 和 `PUT /admin/api/sites/:key` 接受 optional `argon2_m_cost/t_cost/p_cost`；服务端再做一次 `validate_argon2_params` 拦截。
+- **DB schema 增量迁移**：启动时 `ALTER TABLE sites ADD COLUMN argon2_m_cost/t_cost/p_cost INTEGER NOT NULL DEFAULT 19456/2/1`，列已存在时静默忽略；回滚到 v1.2.x 时多出的列被旧二进制忽略，schema 级向后兼容。
+- **集成测试**（`tests/integration.rs`）
+  - `challenge_contains_argon2_params`：新 challenge 响应含参数
+  - `challenge_params_covered_by_signature`：篡改 `m_cost` → 401
+  - `challenge_tampered_t_cost_rejected`：篡改 `t_cost` → 401
+  - `different_sites_different_argon2_params`：多站点独立参数生效
+  - `e2e_with_custom_argon2_params`：自定义参数走完 challenge → verify → siteverify
+  - `legacy_json_fallback_default_params`：旧格式 JSON 回填 `4096/1/1`
+- **`docs/UPGRADING.md`** 重写：v1.2.x → v1.3.0 蓝绿/灰度步骤、回滚注意事项、参数调整（无需重启）、性能参考表。
+
+### 变更
+
+- **`captcha-core/src/pow.rs` 移除全局 `OnceLock<Argon2>`**：`compute_base_hash` 和 `solve` 接收 `&Challenge`，按 `challenge.m_cost/t_cost/p_cost` 动态构建 Argon2 实例。服务端 `/api/v1/verify` 的单次验证开销从 5ms（4MiB）升至 ~20ms（19MiB 默认）；高并发场景建议先评估内存容量。
+- **WASM solver 按 challenge 重建 Argon2**（`captcha-wasm/src/lib.rs`）：`create_solver` 直接调用 `pow::compute_base_hash(&challenge)`，无需 JS 层显式传参。
+- **参数范围校验常量**（`captcha-server/src/config.rs`）：`ARGON2_M_COST_MIN=8 / MAX=65536`、`ARGON2_T_COST_MIN=1 / MAX=10`、`ARGON2_P_COST_FIXED=1`。管理面板 UI 的 `<input min/max>` 与服务端校验保持一致。
+- **配置模板**（`captcha-server gen-config`）新增注释形式的 Argon2 参数示例。
+- **所有 crate / SDK / admin-ui 版本号统一升级到 1.3.0**。
+
+### 破坏性
+
+- **不破坏 `/api/v1/*` 外部 API**：`challenge` 响应新增字段、`verify` 请求体含 challenge 结构，主站后端解析 JSON 时会收到额外字段但无需处理。
+- **服务端 + SDK 必须同步升级**：旧 SDK 硬编码 `4096/1/1` 求解，服务端用 challenge 下发参数验证，参数不一致会导致 base_hash 不同 → 验证失败。
+  - Docker Compose 一键部署场景自动同步（SDK 随 `captcha-server` 镜像分发）。
+  - 主站自己打包过 SDK 的情况下，需要在升级服务端后 `pnpm build` 重新拉取。
+- **不在混合版本下运行**：若存在部分节点已升 1.3.0、部分仍在 1.2.x 的中间态，主站前端可能随机命中不同节点，出现随机验证失败。建议蓝绿一次切完或窗口极短。
+
+---
+
 ## [1.2.5] — 2026-04-24
 
 ### 修复（安全硬化）

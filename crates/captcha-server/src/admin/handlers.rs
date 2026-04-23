@@ -44,6 +44,9 @@ pub struct SiteView {
     secret_key: String,
     diff: u8,
     origins: Vec<String>,
+    argon2_m_cost: u32,
+    argon2_t_cost: u32,
+    argon2_p_cost: u32,
 }
 
 pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
@@ -56,6 +59,9 @@ pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
             secret_key: v.secret_key.clone(),
             diff: v.diff,
             origins: v.origins.clone(),
+            argon2_m_cost: v.argon2_m_cost,
+            argon2_t_cost: v.argon2_t_cost,
+            argon2_p_cost: v.argon2_p_cost,
         })
         .collect();
     Json(sites)
@@ -68,6 +74,9 @@ pub struct CreateSiteRequest {
     pub diff: u8,
     #[serde(default)]
     pub origins: Vec<String>,
+    pub argon2_m_cost: Option<u32>,
+    pub argon2_t_cost: Option<u32>,
+    pub argon2_p_cost: Option<u32>,
 }
 
 fn gen_hex(len: usize) -> String {
@@ -96,7 +105,23 @@ pub async fn create_site(
         secret_key: secret_key.clone(),
         diff: req.diff,
         origins: req.origins,
+        argon2_m_cost: req
+            .argon2_m_cost
+            .unwrap_or(captcha_core::challenge::DEFAULT_M_COST),
+        argon2_t_cost: req
+            .argon2_t_cost
+            .unwrap_or(captcha_core::challenge::DEFAULT_T_COST),
+        argon2_p_cost: req
+            .argon2_p_cost
+            .unwrap_or(captcha_core::challenge::DEFAULT_P_COST),
     };
+    if let Err(e) = new_site.validate_argon2_params() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
+    }
     crate::db::insert_site(&state.db, &site_key, &new_site);
     config.sites.insert(site_key.clone(), new_site);
     state.reload_config(config).await;
@@ -130,6 +155,9 @@ pub struct UpdateSiteRequest {
     pub diff: Option<u8>,
     #[serde(default)]
     pub origins: Option<Vec<String>>,
+    pub argon2_m_cost: Option<u32>,
+    pub argon2_t_cost: Option<u32>,
+    pub argon2_p_cost: Option<u32>,
 }
 
 pub async fn update_site(
@@ -151,7 +179,31 @@ pub async fn update_site(
     if let Some(ref o) = req.origins {
         site.origins = o.clone();
     }
-    crate::db::update_site_fields(&state.db, &key, req.diff, req.origins.as_deref());
+    if let Some(m) = req.argon2_m_cost {
+        site.argon2_m_cost = m;
+    }
+    if let Some(t) = req.argon2_t_cost {
+        site.argon2_t_cost = t;
+    }
+    if let Some(p) = req.argon2_p_cost {
+        site.argon2_p_cost = p;
+    }
+    if let Err(e) = site.validate_argon2_params() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
+    }
+    crate::db::update_site_fields(
+        &state.db,
+        &key,
+        req.diff,
+        req.origins.as_deref(),
+        req.argon2_m_cost,
+        req.argon2_t_cost,
+        req.argon2_p_cost,
+    );
     state.reload_config(config).await;
     Json(serde_json::json!({"ok": true})).into_response()
 }
