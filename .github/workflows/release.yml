@@ -3,10 +3,18 @@ name: Release
 on:
   push:
     tags: ["v*.*.*"]
+  release:
+    types: [published]
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+
+# push tag 和 UI 发布 release 会双触发（当两种路径并用时），
+# 以 tag ref 为 key 去重，同 ref 的重复跑会被取消。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # ─────────── 1. 跨平台二进制 ───────────
