@@ -1,6 +1,6 @@
 [package]
 name = "captcha-wasm"
-version = "1.2.4"
+version = "1.2.5"
 edition = "2021"
 
 [lib]
@@ -18,3 +18,11 @@ console_error_panic_hook = { version = "0.1", optional = true }
 
 [features]
 default = ["console_error_panic_hook"]
+
+# wasm-pack 构建时传给内嵌 wasm-opt 的参数。
+# -O4              最高优化等级 (wasm-opt 的 -Oz 等价)
+# --strip-debug    删除 DWARF debug 段
+# --strip-producers 删除 "producers" custom section (rustc / wasm-bindgen 版本标识)
+# --vacuum         清理未引用的部分
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O4", "--strip-debug", "--strip-producers", "--vacuum"]

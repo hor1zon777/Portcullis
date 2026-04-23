@@ -10,6 +10,10 @@ resolver = "2"
 opt-level = 3
 lto = true
 codegen-units = 1
+# 移除 ELF / PE 符号信息, 减小二进制体积并清理调试符号里的路径串。
+# 注意: 这不会影响 .rodata 里由 file!() 宏嵌入的源路径, 那部分靠
+# .cargo/config.toml 的 --remap-path-prefix 处理。
+strip = "symbols"
 
 # 针对 captcha-wasm 的 release 优化：体积优先
 [profile.release.package.captcha-wasm]

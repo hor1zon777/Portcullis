@@ -13,3 +13,5 @@ captcha.db-wal
 captcha.db-shm
 /data/
 .claude/
+# 本地安全评估报告（含第三方业务协议细节，不入公开仓库）
+/docs/加固建议.md

@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.2.5] — 2026-04-24
+
+### 修复（安全硬化）
+- **WASM 二进制泄露本机 PII 路径**：发布的 `captcha_wasm_bg.wasm` 里嵌入了构建机的完整路径（`C:\Users\<name>\.cargo\...`、`.rustup\...`），每次部署都会暴露构建者用户名。攻击者 `strings` 一下就能拿到。
+- 同时含 `producers` custom section（标识 rustc + wasm-bindgen 精确版本），方便攻击者针对特定版本构造 exploit。
+- 基于一份外部安全评估（含 WASM 字节扫描 + 实证逆向）的 P0-3 条修复。
+
+### 实施
+- 新增 `.cargo/config.toml`：Linux CI / Docker / macOS / Windows 常见构建机的 `$CARGO_HOME` / `$RUSTUP_HOME` 都做 `--remap-path-prefix` 脱敏 → `/cargo` / `/rustup`。
+- workspace `Cargo.toml` `[profile.release]` 加 `strip = "symbols"`：移除 ELF/PE 符号表。
+- `crates/captcha-wasm/Cargo.toml` 加 `[package.metadata.wasm-pack.profile.release]`：wasm-pack 构建时 wasm-opt 带 `--strip-debug --strip-producers --vacuum`，清 DWARF + producers section。
+
+### 验证
+- rebuild 后 `strings sdk/pkg/captcha_wasm_bg.wasm | grep -i "Captain"` → 空
+- `strings | grep -E "rustc|processed-by|wasm-bindgen v"` → 空（producers section 已删）
+
+### 已知残留（本版本不处理）
+- crate 版本号路径（如 `argon2-0.5.3/src/params.rs`）仍可见。要彻底清除需 `panic = "abort"`，但会让 server handler panic 时直接杀进程，代价过高。v1.3.0 通过 PoW 参数下发化协议（challenge 自带 m/t/p 且 HMAC 签名覆盖）让攻击者即使知道 crate 版本也无法预计算，从而 neutralize 这条残留的攻击价值。
+
+### 无功能变更
+- 后端协议零改动；所有 crate 版本号同步到 1.2.5。
+
+---
+
 ## [1.2.4] — 2026-04-23
 
 ### 修复

@@ -1,0 +1,27 @@
+# 构建路径脱敏
+#
+# rustc 把 file!() / panic site 的源文件路径嵌入 .rodata, 默认会暴露
+# 构建机的 $CARGO_HOME / $RUSTUP_HOME / 用户名等 PII 信息。
+# 这里把常见 CI / Docker / 本地构建机的路径前缀重映射成短别名:
+#   - 生产发布走 GitHub Actions ubuntu-latest (runner 用户)
+#   - Docker 多阶段镜像构建 (root 用户)
+# 其他开发者本地构建希望同样效果, 可以在自己的 ~/.cargo/config.toml
+# 追加自身 $HOME 对应的 --remap-path-prefix= 规则, 不会和这里冲突。
+
+[build]
+rustflags = [
+    # Linux CI
+    "--remap-path-prefix=/home/runner/.cargo=/cargo",
+    "--remap-path-prefix=/home/runner/.rustup=/rustup",
+    # Docker (多阶段 Dockerfile 里的 rust:1-slim 默认以 root 运行)
+    "--remap-path-prefix=/root/.cargo=/cargo",
+    "--remap-path-prefix=/root/.rustup=/rustup",
+    "--remap-path-prefix=/usr/local/cargo=/cargo",
+    "--remap-path-prefix=/usr/local/rustup=/rustup",
+    # macOS CI
+    "--remap-path-prefix=/Users/runner/.cargo=/cargo",
+    "--remap-path-prefix=/Users/runner/.rustup=/rustup",
+    # Windows 本地 (Captain 开发机)
+    "--remap-path-prefix=C:\\Users\\Captain\\.cargo=/cargo",
+    "--remap-path-prefix=C:\\Users\\Captain\\.rustup=/rustup",
+]
