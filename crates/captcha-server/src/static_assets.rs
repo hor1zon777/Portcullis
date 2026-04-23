@@ -29,11 +29,7 @@ const BUILD_TIMESTAMP: &str = env!("BUILD_TIMESTAMP");
 
 /// /sdk/manifest.json 暴露的 artifact 白名单。
 /// 仅放主站接入必需的三个文件，避免把 sourcemap / 内部模块也暴露给 SRI。
-const MANIFEST_ARTIFACTS: &[&str] = &[
-    "pow-captcha.js",
-    "captcha_wasm.js",
-    "captcha_wasm_bg.wasm",
-];
+const MANIFEST_ARTIFACTS: &[&str] = &["pow-captcha.js", "captcha_wasm.js", "captcha_wasm_bg.wasm"];
 
 /// 编译期嵌入的文件内容不变，哈希只需算一次。
 struct AssetMeta {
@@ -246,10 +242,12 @@ fn render_manifest(signing_key: Option<&SigningKey>) -> Response {
         }
     }
 
-    builder.body(axum::body::Body::from(body)).unwrap_or_else(|e| {
-        tracing::error!("manifest response builder 失败: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-    })
+    builder
+        .body(axum::body::Body::from(body))
+        .unwrap_or_else(|e| {
+            tracing::error!("manifest response builder 失败: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })
 }
 
 // ───────────── Route handler ─────────────
@@ -270,7 +268,9 @@ pub async fn serve_sdk(
 ) -> Response {
     if file == "manifest.json" {
         let cfg = state.config.load();
-        let sk = cfg.manifest_signing_key.map(|seed| SigningKey::from_bytes(&seed));
+        let sk = cfg
+            .manifest_signing_key
+            .map(|seed| SigningKey::from_bytes(&seed));
         return render_manifest(sk.as_ref());
     }
 
@@ -294,7 +294,10 @@ fn looks_like_version(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
-        && s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+        && s.chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
 }
 
 #[cfg(test)]

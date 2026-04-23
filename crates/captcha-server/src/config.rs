@@ -295,7 +295,9 @@ pub fn print_gen_manifest_key() {
     let sk = ed25519_dalek::SigningKey::from_bytes(&seed);
     let pk = sk.verifying_key();
 
-    println!("私钥 seed (保密，写入 CAPTCHA_MANIFEST_SIGNING_KEY 或 [server].manifest_signing_key):");
+    println!(
+        "私钥 seed (保密，写入 CAPTCHA_MANIFEST_SIGNING_KEY 或 [server].manifest_signing_key):"
+    );
     println!("  {}", B64.encode(sk.to_bytes()));
     println!();
     println!("公钥 (公开，通过带外渠道配置到主站作为 manifest 验签公钥):");

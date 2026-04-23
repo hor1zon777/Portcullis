@@ -313,7 +313,12 @@ async fn sdk_manifest_json() {
         .expect("CORP 头缺失");
     assert_eq!(corp.to_str().unwrap(), "cross-origin");
 
-    let cache = res.headers().get("cache-control").unwrap().to_str().unwrap();
+    let cache = res
+        .headers()
+        .get("cache-control")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(cache.contains("max-age=300"), "cache-control={cache}");
 
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
@@ -349,7 +354,12 @@ async fn sdk_versioned_path_current_version() {
     let res = get_full(&app, &path).await;
     assert_eq!(res.status(), StatusCode::OK);
 
-    let cache = res.headers().get("cache-control").unwrap().to_str().unwrap();
+    let cache = res
+        .headers()
+        .get("cache-control")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(cache.contains("immutable"), "cache-control={cache}");
     assert!(cache.contains("31536000"), "cache-control={cache}");
 
@@ -380,7 +390,12 @@ async fn sdk_legacy_path_backward_compatible() {
     let res = get_full(&app, "/sdk/pow-captcha.js").await;
     assert_eq!(res.status(), StatusCode::OK);
 
-    let cache = res.headers().get("cache-control").unwrap().to_str().unwrap();
+    let cache = res
+        .headers()
+        .get("cache-control")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(cache.contains("max-age=3600"), "cache-control={cache}");
     assert!(
         !cache.contains("immutable"),
@@ -424,7 +439,7 @@ async fn manifest_signed_verifies_with_pubkey() {
         eprintln!("sdk/dist/pow-captcha.js 不存在，跳过");
         return;
     }
-    use ed25519_dalek::{Signature, Verifier, SigningKey};
+    use ed25519_dalek::{Signature, SigningKey, Verifier};
 
     let seed = [0x5au8; 32];
     let sk = SigningKey::from_bytes(&seed);
