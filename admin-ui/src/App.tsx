@@ -94,7 +94,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <div className="mt-auto pt-4 border-t border-border/50 dark:border-gray-800/50">
             <div className="px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
-              <span className="pulse-dot">Portcullis v1.2.2</span>
+              <span className="pulse-dot">Portcullis v1.2.3</span>
             </div>
           </div>
         </nav>

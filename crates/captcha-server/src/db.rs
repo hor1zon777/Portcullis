@@ -80,6 +80,12 @@ pub fn migrate(db: &Db) {
             PRIMARY KEY (id, kind)
         );
         CREATE INDEX IF NOT EXISTS idx_replay_exp ON replay_nonces(expires_ms);
+
+        CREATE TABLE IF NOT EXISTS server_secrets (
+            key        TEXT PRIMARY KEY,
+            value      BLOB NOT NULL,
+            created_at INTEGER NOT NULL
+        );
         ",
     )
     .expect("数据库迁移失败");
@@ -322,6 +328,52 @@ pub fn cleanup_expired_nonces(db: &Db) {
     });
 }
 
+// ──────── 服务端密钥（长寿 secret，比如 manifest signing key seed） ────────
+
+/// 读取 32 字节秘密。不存在或长度不符返回 None。
+pub fn load_server_secret_32(db: &Db, key: &str) -> Option<[u8; 32]> {
+    let conn = lock(db);
+    let value: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT value FROM server_secrets WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .ok();
+    let bytes = value?;
+    if bytes.len() != 32 {
+        tracing::warn!(key, len = bytes.len(), "server_secrets 长度非 32，忽略");
+        return None;
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Some(out)
+}
+
+/// 写入 / 覆盖 32 字节秘密（INSERT OR REPLACE）。
+pub fn save_server_secret_32(db: &Db, key: &str, value: &[u8; 32]) {
+    let conn = lock(db);
+    conn.execute(
+        "INSERT OR REPLACE INTO server_secrets (key, value, created_at) VALUES (?1, ?2, ?3)",
+        params![key, value.as_slice(), now_ms()],
+    )
+    .unwrap_or_else(|e| {
+        tracing::warn!("DB 写入失败: {e}");
+        0
+    });
+}
+
+/// 删除秘密，返回是否真删除了一行。
+pub fn delete_server_secret(db: &Db, key: &str) -> bool {
+    let conn = lock(db);
+    conn.execute("DELETE FROM server_secrets WHERE key = ?1", params![key])
+        .map(|n| n > 0)
+        .unwrap_or_else(|e| {
+            tracing::warn!("DB 写入失败: {e}");
+            false
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +465,33 @@ mod tests {
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].nonce, 42);
         assert!(logs[0].success);
+    }
+
+    #[test]
+    fn server_secret_roundtrip() {
+        let db = open_memory();
+        migrate(&db);
+
+        assert!(load_server_secret_32(&db, "manifest_signing_key").is_none());
+
+        let seed = [0xbeu8; 32];
+        save_server_secret_32(&db, "manifest_signing_key", &seed);
+        assert_eq!(
+            load_server_secret_32(&db, "manifest_signing_key"),
+            Some(seed)
+        );
+
+        // 覆写
+        let seed2 = [0xadu8; 32];
+        save_server_secret_32(&db, "manifest_signing_key", &seed2);
+        assert_eq!(
+            load_server_secret_32(&db, "manifest_signing_key"),
+            Some(seed2)
+        );
+
+        // 删除
+        assert!(delete_server_secret(&db, "manifest_signing_key"));
+        assert!(!delete_server_secret(&db, "manifest_signing_key"));
+        assert!(load_server_secret_32(&db, "manifest_signing_key").is_none());
     }
 }

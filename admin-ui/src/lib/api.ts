@@ -162,6 +162,14 @@ export interface ManifestPubkey {
   algorithm: string;
 }
 
+export interface GenerateManifestKeyResult {
+  enabled: boolean;
+  pubkey: string;
+  algorithm: string;
+  /** true = 此前未配置；false = 覆盖了已有密钥 */
+  first_time: boolean;
+}
+
 // ──────── API 调用 ────────
 
 export const api = {
@@ -185,4 +193,8 @@ export const api = {
   unblockIp: (ip: string) =>
     request<{ ok: boolean }>('/risk/block', { method: 'DELETE', body: JSON.stringify({ ip }) }),
   manifestPubkey: () => request<ManifestPubkey>('/manifest-pubkey'),
+  generateManifestKey: () =>
+    request<GenerateManifestKeyResult>('/manifest-pubkey/generate', { method: 'POST' }),
+  revokeManifestKey: () =>
+    request<{ ok: boolean; removed: boolean }>('/manifest-pubkey', { method: 'DELETE' }),
 };

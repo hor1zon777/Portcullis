@@ -33,7 +33,12 @@ impl AppState {
 
     pub async fn reload_config(&self, new_config: Config) {
         let risk_cfg = new_config.risk.clone();
-        self.config.store(Arc::new(new_config));
+        let mut merged = new_config;
+        // manifest signing key 以 DB 为准，防止热重载 toml/env 时覆盖管理面板生成/撤销的结果
+        merged.manifest_signing_key =
+            crate::db::load_server_secret_32(&self.db, "manifest_signing_key")
+                .or(merged.manifest_signing_key);
+        self.config.store(Arc::new(merged));
         self.risk.write().await.update_config(risk_cfg);
         tracing::info!("配置已热重载");
     }

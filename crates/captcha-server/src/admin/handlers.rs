@@ -251,3 +251,68 @@ pub async fn manifest_pubkey(State(state): State<AppState>) -> Json<ManifestPubk
         }),
     }
 }
+
+// ──────── POST /admin/api/manifest-pubkey/generate ────────
+
+#[derive(Serialize)]
+pub struct GenerateManifestKeyResponse {
+    enabled: bool,
+    pubkey: String,
+    algorithm: &'static str,
+    /// 是否为首次生成（false 表示覆盖了已有密钥）
+    first_time: bool,
+}
+
+pub async fn generate_manifest_key(State(state): State<AppState>) -> Response {
+    let first_time = {
+        let cfg = state.config.load();
+        cfg.manifest_signing_key.is_none()
+    };
+
+    let mut seed = [0u8; 32];
+    if let Err(e) = getrandom::getrandom(&mut seed) {
+        tracing::error!("manifest 签名 seed 生成失败: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "随机数生成失败"})),
+        )
+            .into_response();
+    }
+
+    crate::db::save_server_secret_32(&state.db, "manifest_signing_key", &seed);
+
+    // 更新 ArcSwap 配置，使后续 /sdk/manifest.json 立即用新 key 签名
+    let mut new_cfg = state.config.load_full().as_ref().clone();
+    new_cfg.manifest_signing_key = Some(seed);
+    state.config.store(std::sync::Arc::new(new_cfg));
+
+    let pk = SigningKey::from_bytes(&seed).verifying_key();
+    tracing::info!(first_time, "管理面板生成新的 manifest 签名密钥");
+
+    Json(GenerateManifestKeyResponse {
+        enabled: true,
+        pubkey: B64.encode(pk.to_bytes()),
+        algorithm: "ed25519",
+        first_time,
+    })
+    .into_response()
+}
+
+// ──────── DELETE /admin/api/manifest-pubkey ────────
+
+pub async fn revoke_manifest_key(State(state): State<AppState>) -> Response {
+    let removed = crate::db::delete_server_secret(&state.db, "manifest_signing_key");
+
+    // 热生效：把配置中的 signing key 置空
+    let mut new_cfg = state.config.load_full().as_ref().clone();
+    new_cfg.manifest_signing_key = None;
+    state.config.store(std::sync::Arc::new(new_cfg));
+
+    if removed {
+        tracing::info!("管理面板撤销 manifest 签名密钥");
+        Json(serde_json::json!({"ok": true, "removed": true})).into_response()
+    } else {
+        // 没有密钥可撤销，也算幂等成功
+        Json(serde_json::json!({"ok": true, "removed": false})).into_response()
+    }
+}

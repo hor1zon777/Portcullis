@@ -560,3 +560,166 @@ async fn admin_manifest_pubkey_requires_auth() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn admin_generate_manifest_key_from_empty() {
+    use ed25519_dalek::{Signature, SigningKey, Verifier};
+
+    let mut cfg = test_config();
+    cfg.admin_token = Some("test-admin-token".to_string());
+    // 初始无 signing key
+    assert!(cfg.manifest_signing_key.is_none());
+
+    let db = captcha_server::db::open_memory();
+    let state = AppState::new(cfg, db.clone());
+    let app = build_router(state.clone(), None, None);
+
+    // 1. POST /generate
+    let gen_req = Request::builder()
+        .method("POST")
+        .uri("/admin/api/manifest-pubkey/generate")
+        .header("authorization", "Bearer test-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let gen_res = app.clone().oneshot(gen_req).await.unwrap();
+    assert_eq!(gen_res.status(), StatusCode::OK);
+
+    let bytes = to_bytes(gen_res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["enabled"], true);
+    assert_eq!(v["first_time"], true);
+    let pubkey_b64 = v["pubkey"].as_str().unwrap().to_string();
+
+    // 2. DB 持久化
+    let seed_from_db =
+        captcha_server::db::load_server_secret_32(&db, "manifest_signing_key").unwrap();
+    let expected_pk_b64 = B64.encode(
+        SigningKey::from_bytes(&seed_from_db)
+            .verifying_key()
+            .to_bytes(),
+    );
+    assert_eq!(pubkey_b64, expected_pk_b64);
+
+    // 3. ArcSwap 配置已更新：GET 应返回相同公钥
+    let get_req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/manifest-pubkey")
+        .header("authorization", "Bearer test-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let get_res = app.clone().oneshot(get_req).await.unwrap();
+    let bytes = to_bytes(get_res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["enabled"], true);
+    assert_eq!(v["pubkey"].as_str().unwrap(), pubkey_b64);
+
+    // 4. /sdk/manifest.json 立即带上签名，且签名能被返回的公钥验证
+    if sdk_assets_available() {
+        let manifest_res = get_full(&app, "/sdk/manifest.json").await;
+        assert_eq!(manifest_res.status(), StatusCode::OK);
+        let sig_b64 = manifest_res
+            .headers()
+            .get("x-portcullis-signature")
+            .expect("生成密钥后 manifest 应带签名 header")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = to_bytes(manifest_res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let sig_bytes = B64.decode(&sig_b64).unwrap();
+        let sig_arr: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
+        let sig = Signature::from_bytes(&sig_arr);
+
+        let pk_bytes = B64.decode(&pubkey_b64).unwrap();
+        let pk_arr: [u8; 32] = pk_bytes.as_slice().try_into().unwrap();
+        let pk = ed25519_dalek::VerifyingKey::from_bytes(&pk_arr).unwrap();
+        pk.verify(&body, &sig).expect("新生成的公钥应能验签");
+    }
+}
+
+#[tokio::test]
+async fn admin_generate_manifest_key_overwrite() {
+    let mut cfg = test_config();
+    cfg.admin_token = Some("test-admin-token".to_string());
+    cfg.manifest_signing_key = Some([0x11u8; 32]);
+
+    let db = captcha_server::db::open_memory();
+    let state = AppState::new(cfg, db.clone()); // migrate 先跑
+                                                // 种一个"已有 seed"状态（模拟 env/toml seed 到 DB 之后）
+    captcha_server::db::save_server_secret_32(&db, "manifest_signing_key", &[0x11u8; 32]);
+
+    let app = build_router(state, None, None);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/api/manifest-pubkey/generate")
+        .header("authorization", "Bearer test-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["first_time"], false);
+
+    // DB 里的 seed 已被替换（极大概率不是 [0x11;32]）
+    let seed = captcha_server::db::load_server_secret_32(&db, "manifest_signing_key").unwrap();
+    assert_ne!(seed, [0x11u8; 32]);
+}
+
+#[tokio::test]
+async fn admin_revoke_manifest_key() {
+    let mut cfg = test_config();
+    cfg.admin_token = Some("test-admin-token".to_string());
+    cfg.manifest_signing_key = Some([0x22u8; 32]);
+
+    let db = captcha_server::db::open_memory();
+    let state = AppState::new(cfg, db.clone()); // migrate 先跑
+    captcha_server::db::save_server_secret_32(&db, "manifest_signing_key", &[0x22u8; 32]);
+
+    let app = build_router(state, None, None);
+
+    // 撤销
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/admin/api/manifest-pubkey")
+        .header("authorization", "Bearer test-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["removed"], true);
+
+    // DB 清空
+    assert!(captcha_server::db::load_server_secret_32(&db, "manifest_signing_key").is_none());
+
+    // 状态回到 enabled=false
+    let get_req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/manifest-pubkey")
+        .header("authorization", "Bearer test-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let get_res = app.clone().oneshot(get_req).await.unwrap();
+    let bytes = to_bytes(get_res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["enabled"], false);
+
+    // 再次撤销应是幂等 ok:true removed:false
+    let req2 = Request::builder()
+        .method("DELETE")
+        .uri("/admin/api/manifest-pubkey")
+        .header("authorization", "Bearer test-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let res2 = app.oneshot(req2).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+    let bytes = to_bytes(res2.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["removed"], false);
+}

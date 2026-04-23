@@ -66,6 +66,16 @@ async fn main() {
     cfg.risk.blocked_ips = captcha_server::db::load_ip_list(&db, "blocked");
     cfg.risk.allowed_ips = captcha_server::db::load_ip_list(&db, "allowed");
 
+    // manifest signing key：env/toml 配置首次 seed 到 DB，之后 DB 为 source of truth
+    // 管理面板「一键生成」写入的也走 DB。
+    if let Some(seed) = cfg.manifest_signing_key {
+        if captcha_server::db::load_server_secret_32(&db, "manifest_signing_key").is_none() {
+            captcha_server::db::save_server_secret_32(&db, "manifest_signing_key", &seed);
+        }
+    }
+    cfg.manifest_signing_key =
+        captcha_server::db::load_server_secret_32(&db, "manifest_signing_key");
+
     let site_count = cfg.sites.len();
     tracing::info!("SQLite 已初始化：{}", cfg.db_path.display());
 

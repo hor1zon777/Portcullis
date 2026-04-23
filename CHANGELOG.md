@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.2.3] — 2026-04-23
+
+### 新增
+- **一键生成 / 重新生成 / 停用 manifest 签名密钥**，完全在管理面板「安全」页完成，无需命令行与改环境变量。
+  - `POST /admin/api/manifest-pubkey/generate`：服务端随机 32 字节 seed → 写 SQLite `server_secrets` 表 → 更新 ArcSwap 配置 → 返回公钥。热生效，`/sdk/manifest.json` 立刻开始签名。
+  - `DELETE /admin/api/manifest-pubkey`：删除 DB 中的 seed + 置空配置。幂等（`removed: bool` 标记是否真删了）。
+  - 覆盖语义：若已有密钥，生成即替换；响应 `first_time: false`。
+- SQLite 新增 `server_secrets` 表存放 32 字节长寿秘密。
+- `AppState::reload_config` 合并时以 DB 中的 signing key 为准，防止配置热重载覆盖管理面板生成/撤销的结果。
+
+### 前端
+- 「安全」页「未配置」状态显示「一键生成密钥对」大按钮 + 操作说明卡片。
+- 「已启用」状态新增「重新生成」「停用」按钮，均有 `ConfirmDialog` 二次确认（标红 destructive 样式）。
+- 所有操作成功后 `react-query invalidate`，页面自动刷新到最新状态。
+
+### 兼容
+- 原 env `CAPTCHA_MANIFEST_SIGNING_KEY` / toml `[server].manifest_signing_key` 依然有效，**首次启动**时会 seed 到 DB，之后 DB 为 source of truth。
+- 已有 v1.2.0 ~ v1.2.2 的部署升级后，若之前用 env/toml 配过密钥，首次启动自动导入 DB；之后管理员可直接在面板上重新生成或停用。
+
+---
+
 ## [1.2.2] — 2026-04-23
 
 ### 新增
