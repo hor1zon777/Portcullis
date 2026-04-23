@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use rust_embed::RustEmbed;
 use serde::Serialize;
 use sha2::{Digest, Sha256, Sha384};
+
+use crate::state::AppState;
 
 #[derive(RustEmbed)]
 #[folder = "$CARGO_MANIFEST_DIR/../../sdk/dist/"]
@@ -178,7 +181,7 @@ struct Manifest {
     artifacts: HashMap<&'static str, ManifestArtifact>,
 }
 
-fn render_manifest() -> Response {
+fn render_manifest(signing_key: Option<&SigningKey>) -> Response {
     let meta = meta_map();
     let mut artifacts = HashMap::new();
     for name in MANIFEST_ARTIFACTS {
@@ -209,7 +212,7 @@ fn render_manifest() -> Response {
         }
     };
 
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(
             header::CONTENT_TYPE,
@@ -226,12 +229,27 @@ fn render_manifest() -> Response {
         .header(
             "Cross-Origin-Resource-Policy",
             HeaderValue::from_static("cross-origin"),
-        )
-        .body(axum::body::Body::from(body))
-        .unwrap_or_else(|e| {
-            tracing::error!("manifest response builder 失败: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        })
+        );
+
+    // 配置了 Ed25519 signing key 时签 body 字节，放 response header
+    if let Some(sk) = signing_key {
+        let sig = sk.sign(&body);
+        let sig_b64 = B64.encode(sig.to_bytes());
+        match HeaderValue::from_str(&sig_b64) {
+            Ok(v) => {
+                builder = builder.header("X-Portcullis-Signature", v);
+            }
+            Err(e) => {
+                tracing::error!("X-Portcullis-Signature header 构造失败: {e}");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    }
+
+    builder.body(axum::body::Body::from(body)).unwrap_or_else(|e| {
+        tracing::error!("manifest response builder 失败: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    })
 }
 
 // ───────────── Route handler ─────────────
@@ -241,13 +259,19 @@ const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
 /// 统一入口：`GET /sdk/*file`
 ///
-/// - `manifest.json` → 版本 + SRI 清单
+/// - `manifest.json` → 版本 + SRI 清单；配置了签名密钥时带 `X-Portcullis-Signature` 响应头
 /// - `v{SDK_VERSION}/<asset>` → 版本化只读路径（immutable 长缓存）
 /// - `v{其他版本}/<asset>` → 404（避免旧版本字节被静默返回）
 /// - 其它 → 旧路径，向后兼容（短缓存）
-pub async fn serve_sdk(headers: HeaderMap, Path(file): Path<String>) -> Response {
+pub async fn serve_sdk(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(file): Path<String>,
+) -> Response {
     if file == "manifest.json" {
-        return render_manifest();
+        let cfg = state.config.load();
+        let sk = cfg.manifest_signing_key.map(|seed| SigningKey::from_bytes(&seed));
+        return render_manifest(sk.as_ref());
     }
 
     if let Some(rest) = file.strip_prefix('v') {
@@ -276,6 +300,7 @@ fn looks_like_version(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signature, Verifier};
 
     #[test]
     fn version_matches_cargo() {
@@ -307,5 +332,28 @@ mod tests {
         let integrity = format!("sha384-{}", B64.encode(sha384));
         assert!(integrity.starts_with("sha384-"));
         assert!(integrity.len() > "sha384-".len());
+    }
+
+    #[test]
+    fn ed25519_sign_verify_roundtrip() {
+        // 验证 Tier 2 签名协议本身可 roundtrip：
+        // 服务端 seed → SigningKey → sign(body) → base64 → (wire)
+        // 主站 base64 → Signature → VerifyingKey.verify(body, sig) == Ok
+        let seed = [7u8; 32];
+        let sk = SigningKey::from_bytes(&seed);
+        let pk = sk.verifying_key();
+
+        let body = b"{\"version\":\"1.1.2\",\"artifacts\":{}}";
+        let sig = sk.sign(body);
+        let sig_b64 = B64.encode(sig.to_bytes());
+
+        let sig_bytes = B64.decode(&sig_b64).unwrap();
+        let sig_array: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
+        let parsed = Signature::from_bytes(&sig_array);
+        assert!(pk.verify(body, &parsed).is_ok());
+
+        // 篡改 body 应验签失败
+        let tampered = b"{\"version\":\"1.1.3\",\"artifacts\":{}}";
+        assert!(pk.verify(tampered, &parsed).is_err());
     }
 }

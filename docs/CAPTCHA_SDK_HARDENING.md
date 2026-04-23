@@ -15,10 +15,14 @@
 | `/sdk/manifest.json`（SRI 清单） | ✅ 已实施 | Tier 1 | 每 artifact 带 `sha384-<base64>` integrity |
 | `Cross-Origin-Resource-Policy: cross-origin` | ✅ 已实施 | Tier 1 | SDK 资源 + manifest 统一附加 |
 | 旧路径 `/sdk/*` 向后兼容 | ✅ 保留 | Tier 1 | `max-age=3600`，不带 SRI |
-| Ed25519 签名 manifest | ⏸ 未实施 | Tier 2 | 待主站 Tier 1 对接稳定后再评估 |
+| Ed25519 签名 manifest | ✅ 已实施 | Tier 2 | 可选 opt-in，未配置密钥时向后兼容 |
+| `X-Portcullis-Signature` 响应头 | ✅ 已实施 | Tier 2 | base64(Ed25519 sig of response body bytes) |
+| `gen-manifest-key` CLI 子命令 | ✅ 已实施 | Tier 2 | 输出 seed + 公钥供带外配置 |
+| `GET /admin/api/manifest-pubkey` | ✅ 已实施 | Tier 2 | 管理面板导出当前公钥 |
+| 双密钥轮换 | ⏸ 未实施 | Tier 3? | 目前通过两步部署完成切换；如频次高再设计 |
 | Trusted Types / Permissions-Policy（方案 B/C） | ⏸ 主站侧 | — | 属主站架构层改造，非 Portcullis 范围 |
 
-实施详情：[docs/TIER1_IMPLEMENTATION.md](TIER1_IMPLEMENTATION.md)
+实施详情：[docs/TIER1_IMPLEMENTATION.md](TIER1_IMPLEMENTATION.md)、[docs/TIER2_IMPLEMENTATION.md](TIER2_IMPLEMENTATION.md)
 
 ---
 

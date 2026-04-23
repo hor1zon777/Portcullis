@@ -1,25 +1,36 @@
 # Changelog
 
-## [未发布] — SDK 加固 Tier 1
+## [未发布] — SDK 加固 Tier 1 + Tier 2
 
-基于主站接入方提出的加固建议（`docs/CAPTCHA_SDK_HARDENING.md`），为 SDK 分发增加运行时可验证的 SRI 清单与版本化只读路径。**向后兼容**：旧 `/sdk/*file` 路径保留不变。
+基于主站接入方提出的加固建议（`docs/CAPTCHA_SDK_HARDENING.md`），分两档实施。**全部向后兼容**：旧 `/sdk/*file` 路径保留不变；Tier 2 签名 opt-in，不配置密钥时行为与 Tier 1 一致。
 
-### 新增
+### Tier 1 — SRI 清单与版本化路径
+
 - **`GET /sdk/manifest.json`** — 返回 `{version, builtAt, artifacts}`，每个 artifact 含 `url` / `sha384-<base64>` integrity / `size`。主站可据此做 `<script integrity=...>` 加载。
 - **`GET /sdk/v{version}/*file`** — 版本化只读路径，`Cache-Control: public, max-age=31536000, immutable`，版本来自 `CARGO_PKG_VERSION`。
 - **`Cross-Origin-Resource-Policy: cross-origin`** 头加到所有 SDK 资源与 manifest 响应，配合主站启用 COEP 时免手动放通。
 - **SHA-384 integrity** 计算：rust-embed 嵌入字节编译期入 `OnceLock`，与原有 SHA-256 ETag 并存。
 - **`BUILD_TIMESTAMP`** build.rs 环境变量，供 manifest `builtAt` 字段使用。
 
+### Tier 2 — Ed25519 签名 manifest
+
+- **`X-Portcullis-Signature`** 响应头：base64 编码的 Ed25519 签名（对 manifest response body 原始字节签名），配置了私钥时发出，未配置时缺失（向后兼容）。
+- **`CAPTCHA_MANIFEST_SIGNING_KEY`** env / `[server].manifest_signing_key` toml：Ed25519 32 字节 seed 的 base64。
+- **`captcha-server gen-manifest-key`** CLI 子命令：生成密钥对并分行输出 seed / 公钥，供带外配置。
+- **`GET /admin/api/manifest-pubkey`**（需 admin token）：返回 `{enabled, pubkey, algorithm}`，供管理员复制公钥到主站配置。
+- 依赖新增：`ed25519-dalek = "2"`（`default-features = false` + `std` + `fast`）。
+
 ### 保留
-- `GET /sdk/*file` 原路径照常工作，`Cache-Control: public, max-age=3600`，不带 SRI。升级期主站若命中旧 manifest 可 fallback 到此路径。
+- `GET /sdk/*file` 原路径照常工作，`Cache-Control: public, max-age=3600`，不带 SRI / 签名。升级期主站若命中旧 manifest 可 fallback 到此路径。
 
 ### 文档
-- `docs/CAPTCHA_SDK_HARDENING.md`（威胁定义与方案对比）
-- `docs/TIER1_IMPLEMENTATION.md`（实施进度与完成日志、端点清单、主站对接示意）
+- `docs/CAPTCHA_SDK_HARDENING.md`（威胁定义、方案对比、最新实施状态表）
+- `docs/TIER1_IMPLEMENTATION.md`（Tier 1 进度与完成日志）
+- `docs/TIER2_IMPLEMENTATION.md`（Tier 2 进度与完成日志、主站验签示例）
+- `docs/INTEGRATION.md` — 新增"方式 D：带 SRI 的动态加载"与"方式 D+：验签升级"
 
-### 未做（Tier 2，视主站需求再评估）
-- manifest 的 Ed25519 签名 + 管理面板公钥导出 UI
+### 未做（观察需要后再评估）
+- 双 signing key 轮换（当前轮换靠两步部署：主站先认新公钥 → Portcullis 切换私钥）
 
 ---
 

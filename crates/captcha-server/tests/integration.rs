@@ -35,6 +35,7 @@ fn test_config() -> Config {
         admin_token: None,
         db_path: std::path::PathBuf::from(":memory:"),
         config_path: None,
+        manifest_signing_key: None,
     }
 }
 
@@ -392,4 +393,155 @@ async fn sdk_unknown_file_404() {
     let app = router();
     let res = get_full(&app, "/sdk/does-not-exist.js").await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+// ───────────── SDK 加固 Tier 2（Ed25519 签名 manifest） ─────────────
+
+fn test_config_with_signing_key(seed: [u8; 32]) -> Config {
+    let mut cfg = test_config();
+    cfg.manifest_signing_key = Some(seed);
+    cfg
+}
+
+#[tokio::test]
+async fn manifest_unsigned_when_key_absent() {
+    if !sdk_assets_available() {
+        eprintln!("sdk/dist/pow-captcha.js 不存在，跳过");
+        return;
+    }
+    let app = router();
+    let res = get_full(&app, "/sdk/manifest.json").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers().get("x-portcullis-signature").is_none(),
+        "未配置 signing key 时不应发出签名 header"
+    );
+}
+
+#[tokio::test]
+async fn manifest_signed_verifies_with_pubkey() {
+    if !sdk_assets_available() {
+        eprintln!("sdk/dist/pow-captcha.js 不存在，跳过");
+        return;
+    }
+    use ed25519_dalek::{Signature, Verifier, SigningKey};
+
+    let seed = [0x5au8; 32];
+    let sk = SigningKey::from_bytes(&seed);
+    let expected_pk = sk.verifying_key();
+
+    let app = build_router(
+        AppState::new(
+            test_config_with_signing_key(seed),
+            captcha_server::db::open_memory(),
+        ),
+        None,
+        None,
+    );
+
+    let res = get_full(&app, "/sdk/manifest.json").await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let sig_b64 = res
+        .headers()
+        .get("x-portcullis-signature")
+        .expect("配置 signing key 时必须有签名 header")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+
+    let sig_bytes = B64.decode(&sig_b64).expect("签名 base64 解码失败");
+    let sig_arr: [u8; 64] = sig_bytes
+        .as_slice()
+        .try_into()
+        .expect("Ed25519 签名应是 64 字节");
+    let signature = Signature::from_bytes(&sig_arr);
+
+    expected_pk
+        .verify(&body, &signature)
+        .expect("公钥验签应成功");
+
+    // 篡改 body 应导致验签失败
+    let mut tampered = body.to_vec();
+    tampered[0] ^= 0x01;
+    assert!(expected_pk.verify(&tampered, &signature).is_err());
+}
+
+#[tokio::test]
+async fn admin_manifest_pubkey_disabled() {
+    let mut cfg = test_config();
+    cfg.admin_token = Some("test-admin-token".to_string());
+    let app = build_router(
+        AppState::new(cfg, captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/manifest-pubkey")
+        .header("authorization", "Bearer test-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["enabled"], false);
+    assert_eq!(v["algorithm"], "ed25519");
+    assert!(v.get("pubkey").map(|p| p.is_null()).unwrap_or(true));
+}
+
+#[tokio::test]
+async fn admin_manifest_pubkey_enabled_returns_matching_key() {
+    use ed25519_dalek::SigningKey;
+
+    let seed = [0xa5u8; 32];
+    let sk = SigningKey::from_bytes(&seed);
+    let expected_b64 = B64.encode(sk.verifying_key().to_bytes());
+
+    let mut cfg = test_config_with_signing_key(seed);
+    cfg.admin_token = Some("test-admin-token".to_string());
+    let app = build_router(
+        AppState::new(cfg, captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/manifest-pubkey")
+        .header("authorization", "Bearer test-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["enabled"], true);
+    assert_eq!(v["algorithm"], "ed25519");
+    assert_eq!(v["pubkey"].as_str().unwrap(), expected_b64);
+}
+
+#[tokio::test]
+async fn admin_manifest_pubkey_requires_auth() {
+    let mut cfg = test_config();
+    cfg.admin_token = Some("test-admin-token".to_string());
+    let app = build_router(
+        AppState::new(cfg, captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/manifest-pubkey")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }

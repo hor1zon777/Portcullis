@@ -19,6 +19,7 @@ pub fn admin_router(state: AppState, token: String) -> Router {
         .route("/admin/api/risk/ips", get(handlers::risk_ips))
         .route("/admin/api/risk/block", post(handlers::block_ip))
         .route("/admin/api/risk/block", delete(handlers::unblock_ip))
+        .route("/admin/api/manifest-pubkey", get(handlers::manifest_pubkey))
         .with_state(state)
         .layer(axum::middleware::from_fn(
             move |query, headers, req: axum::http::Request<axum::body::Body>, next| {

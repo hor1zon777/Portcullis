@@ -2,6 +2,9 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
+use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
@@ -213,5 +216,38 @@ pub async fn unblock_ip(State(state): State<AppState>, Json(req): Json<BlockRequ
             Json(serde_json::json!({"error": "IP 不在黑名单中"})),
         )
             .into_response()
+    }
+}
+
+// ──────── GET /admin/api/manifest-pubkey ────────
+
+#[derive(Serialize)]
+pub struct ManifestPubkeyResponse {
+    /// 是否已配置 manifest 签名私钥
+    enabled: bool,
+    /// base64 公钥；`enabled=false` 时省略
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pubkey: Option<String>,
+    /// 对应算法，固定 "ed25519"，便于未来扩展
+    algorithm: &'static str,
+}
+
+pub async fn manifest_pubkey(State(state): State<AppState>) -> Json<ManifestPubkeyResponse> {
+    let cfg = state.config.load();
+    match cfg.manifest_signing_key {
+        Some(seed) => {
+            let sk = SigningKey::from_bytes(&seed);
+            let pk = sk.verifying_key();
+            Json(ManifestPubkeyResponse {
+                enabled: true,
+                pubkey: Some(B64.encode(pk.to_bytes())),
+                algorithm: "ed25519",
+            })
+        }
+        None => Json(ManifestPubkeyResponse {
+            enabled: false,
+            pubkey: None,
+            algorithm: "ed25519",
+        }),
     }
 }

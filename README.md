@@ -185,14 +185,15 @@ token = "运行 captcha-server gen-secret 生成"
 | `/api/v1/siteverify` | POST | 业务后端核验 token |
 | `/admin/api/*` | GET/POST/PUT/DELETE | 管理面板 API（需 Bearer Token） |
 | `/admin/` | GET | React 管理面板（Docker Compose 模式） |
-| `/sdk/manifest.json` | GET | SDK 版本 + SRI integrity 清单（主站按清单加载） |
+| `/sdk/manifest.json` | GET | SDK 版本 + SRI integrity 清单（主站按清单加载；opt-in 带 Ed25519 签名） |
 | `/sdk/v{version}/*` | GET | 版本化只读路径（`immutable` 长缓存，配合 SRI） |
 | `/sdk/*` | GET | 嵌入式 SDK + WASM（ETag/304/gzip，向后兼容路径） |
+| `/admin/api/manifest-pubkey` | GET | 管理面板导出 Ed25519 公钥（供主站配置）；Bearer Token |
 | `/metrics` | GET | Prometheus 指标 |
 | `/healthz` | GET | 健康检查 |
 
 > `/api/v1/*` 格式自 v1.0.0 起冻结。详见 [API 稳定性承诺](docs/API_STABILITY.md)。
-> SDK 分发策略详见 [SDK 加固实施](docs/TIER1_IMPLEMENTATION.md)。
+> SDK 分发策略详见 [Tier 1 实施](docs/TIER1_IMPLEMENTATION.md)、[Tier 2 实施](docs/TIER2_IMPLEMENTATION.md)。
 
 ## 项目结构
 

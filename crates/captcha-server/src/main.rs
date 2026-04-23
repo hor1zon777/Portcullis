@@ -24,6 +24,10 @@ async fn main() {
                 config::print_gen_secret();
                 return;
             }
+            Commands::GenManifestKey => {
+                config::print_gen_manifest_key();
+                return;
+            }
             Commands::Healthcheck { addr } => {
                 run_healthcheck(addr);
                 return;

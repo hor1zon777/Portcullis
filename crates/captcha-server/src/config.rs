@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 
@@ -23,6 +25,7 @@ pub struct Cli {
 pub enum Commands {
     GenConfig,
     GenSecret,
+    GenManifestKey,
     Healthcheck {
         #[arg(default_value = "127.0.0.1:8787")]
         addr: String,
@@ -54,6 +57,9 @@ struct ServerSection {
     secret: Option<String>,
     challenge_ttl_secs: Option<u64>,
     token_ttl_secs: Option<u64>,
+    /// Ed25519 manifest 签名私钥 seed，base64 编码的 32 字节。
+    /// 未配置时 `/sdk/manifest.json` 不带签名 header（Tier 2 opt-in）。
+    manifest_signing_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +92,8 @@ pub struct Config {
     pub admin_token: Option<String>,
     pub db_path: PathBuf,
     pub config_path: Option<PathBuf>,
+    /// Ed25519 manifest 签名私钥的 32 字节 seed；None 时 manifest 不签名。
+    pub manifest_signing_key: Option<[u8; 32]>,
 }
 
 impl Config {
@@ -176,6 +184,15 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("data/captcha.db"));
 
+        let manifest_signing_key = std::env::var("CAPTCHA_MANIFEST_SIGNING_KEY")
+            .ok()
+            .or_else(|| ts.and_then(|s| s.manifest_signing_key.clone()))
+            .map(|raw| {
+                parse_signing_key(&raw).unwrap_or_else(|e| {
+                    panic!("CAPTCHA_MANIFEST_SIGNING_KEY 解析失败: {e}");
+                })
+            });
+
         Self {
             secret: secret.into_bytes(),
             bind,
@@ -186,6 +203,7 @@ impl Config {
             admin_token,
             db_path,
             config_path,
+            manifest_signing_key,
         }
     }
 
@@ -240,6 +258,10 @@ bind = "0.0.0.0:8787"
 secret = "CHANGE_ME_USE_captcha-server_gen-secret"
 challenge_ttl_secs = 120
 token_ttl_secs = 300
+# 可选：Ed25519 manifest 签名私钥 seed（base64，32 字节）。
+# 未配置时 /sdk/manifest.json 不带 X-Portcullis-Signature 响应头。
+# 用 `captcha-server gen-manifest-key` 生成一对密钥。
+# manifest_signing_key = "<base64>"
 
 [[sites]]
 key = "pk_example"
@@ -263,4 +285,67 @@ pub fn print_gen_secret() {
     getrandom::getrandom(&mut buf).expect("随机数生成失败");
     let hex: String = buf.iter().map(|b| format!("{b:02x}")).collect();
     println!("{hex}");
+}
+
+/// 生成 Ed25519 manifest 签名密钥对并写入 stdout。
+/// 私钥 seed 供服务端 env / toml 使用，公钥供主站带外配置。
+pub fn print_gen_manifest_key() {
+    let mut seed = [0u8; 32];
+    getrandom::getrandom(&mut seed).expect("随机数生成失败");
+    let sk = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let pk = sk.verifying_key();
+
+    println!("私钥 seed (保密，写入 CAPTCHA_MANIFEST_SIGNING_KEY 或 [server].manifest_signing_key):");
+    println!("  {}", B64.encode(sk.to_bytes()));
+    println!();
+    println!("公钥 (公开，通过带外渠道配置到主站作为 manifest 验签公钥):");
+    println!("  {}", B64.encode(pk.to_bytes()));
+}
+
+/// 支持 base64 标准字母表；长度必须恰好 32 字节。
+fn parse_signing_key(raw: &str) -> Result<[u8; 32], String> {
+    let trimmed = raw.trim();
+    let bytes = B64
+        .decode(trimmed)
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    if bytes.len() != 32 {
+        return Err(format!("seed 长度必须是 32 字节，当前 {}", bytes.len()));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_signing_key_roundtrip() {
+        let seed = [42u8; 32];
+        let encoded = B64.encode(seed);
+        let parsed = parse_signing_key(&encoded).unwrap();
+        assert_eq!(parsed, seed);
+    }
+
+    #[test]
+    fn parse_signing_key_rejects_wrong_length() {
+        let short = B64.encode([1u8; 16]);
+        assert!(parse_signing_key(&short).is_err());
+        let long = B64.encode([1u8; 64]);
+        assert!(parse_signing_key(&long).is_err());
+    }
+
+    #[test]
+    fn parse_signing_key_rejects_invalid_base64() {
+        assert!(parse_signing_key("not base64!!!").is_err());
+    }
+
+    #[test]
+    fn parse_signing_key_trims_whitespace() {
+        let seed = [7u8; 32];
+        let padded = format!("  {}  \n", B64.encode(seed));
+        let parsed = parse_signing_key(&padded).unwrap();
+        assert_eq!(parsed, seed);
+    }
 }
