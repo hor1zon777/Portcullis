@@ -7,7 +7,8 @@ use subtle::ConstantTimeEq;
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::token;#[derive(Debug, Deserialize)]
+use crate::token;
+#[derive(Debug, Deserialize)]
 pub struct SiteVerifyRequest {
     pub token: String,
     pub secret_key: String,

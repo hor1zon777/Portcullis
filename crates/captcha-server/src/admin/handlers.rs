@@ -121,8 +121,7 @@ pub async fn create_site(
 
     let site_key = gen_site_key();
     let secret_key_plain = gen_secret_key();
-    let secret_key_hash =
-        crate::site_secret::hash(&secret_key_plain, &state.config.load().secret);
+    let secret_key_hash = crate::site_secret::hash(&secret_key_plain, &state.config.load().secret);
     let new_site = crate::config::SiteConfig {
         secret_key: secret_key_hash,
         diff: req.diff,
@@ -148,7 +147,10 @@ pub async fn create_site(
             None,
             ip,
             false,
-            Some(format!(r#"{{"error":{}}}"#, serde_json::to_string(&e).unwrap_or_default())),
+            Some(format!(
+                r#"{{"error":{}}}"#,
+                serde_json::to_string(&e).unwrap_or_default()
+            )),
         );
         return (
             StatusCode::BAD_REQUEST,
@@ -294,7 +296,10 @@ pub async fn update_site(
             Some(key),
             ip,
             false,
-            Some(format!(r#"{{"error":{}}}"#, serde_json::to_string(&e).unwrap_or_default())),
+            Some(format!(
+                r#"{{"error":{}}}"#,
+                serde_json::to_string(&e).unwrap_or_default()
+            )),
         );
         return (
             StatusCode::BAD_REQUEST,

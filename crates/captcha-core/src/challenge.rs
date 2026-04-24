@@ -58,8 +58,7 @@ impl Challenge {
     /// 生成用于 HMAC 签名的确定性字节表示。
     /// 格式：id_bytes | salt(16) | diff(1) | exp_le(8) | site_key_bytes | m_cost_le(4) | t_cost_le(4) | p_cost_le(4)
     pub fn to_sign_bytes(&self) -> Vec<u8> {
-        let mut buf =
-            Vec::with_capacity(self.id.len() + 16 + 1 + 8 + self.site_key.len() + 12);
+        let mut buf = Vec::with_capacity(self.id.len() + 16 + 1 + 8 + self.site_key.len() + 12);
         buf.extend_from_slice(self.id.as_bytes());
         buf.extend_from_slice(&self.salt);
         buf.push(self.diff);

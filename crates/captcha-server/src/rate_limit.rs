@@ -184,8 +184,7 @@ impl AdminLoginLimiter {
     pub fn cleanup(&self) {
         let now = now_ms();
         self.states.retain(|_, st| {
-            st.ban_until_ms > now
-                || now.saturating_sub(st.first_fail_ms) <= ADMIN_FAIL_WINDOW_MS
+            st.ban_until_ms > now || now.saturating_sub(st.first_fail_ms) <= ADMIN_FAIL_WINDOW_MS
         });
     }
 }

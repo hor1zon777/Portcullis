@@ -19,8 +19,7 @@ use crate::difficulty::leading_zero_bits;
 const ARGON2_OUT: usize = 32;
 
 fn build_argon2(m_cost: u32, t_cost: u32, p_cost: u32) -> Argon2<'static> {
-    let params = Params::new(m_cost, t_cost, p_cost, Some(ARGON2_OUT))
-        .expect("Argon2 参数无效");
+    let params = Params::new(m_cost, t_cost, p_cost, Some(ARGON2_OUT)).expect("Argon2 参数无效");
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
@@ -89,7 +88,9 @@ pub fn verify_solution(challenge: &Challenge, nonce: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::challenge::{LEGACY_M_COST, LEGACY_T_COST, LEGACY_P_COST, DEFAULT_M_COST, DEFAULT_T_COST, DEFAULT_P_COST};
+    use crate::challenge::{
+        DEFAULT_M_COST, DEFAULT_P_COST, DEFAULT_T_COST, LEGACY_M_COST, LEGACY_P_COST, LEGACY_T_COST,
+    };
 
     fn make_challenge(diff: u8) -> Challenge {
         Challenge {

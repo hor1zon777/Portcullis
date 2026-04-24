@@ -773,7 +773,11 @@ async fn challenge_params_covered_by_signature() {
         json!({ "challenge": tampered, "sig": ch.sig, "nonce": 0 }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "篡改 m_cost 应导致签名验证失败");
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "篡改 m_cost 应导致签名验证失败"
+    );
 }
 
 #[tokio::test]
@@ -796,7 +800,11 @@ async fn challenge_tampered_t_cost_rejected() {
         json!({ "challenge": tampered, "sig": ch.sig, "nonce": 0 }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "篡改 t_cost 应导致签名验证失败");
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "篡改 t_cost 应导致签名验证失败"
+    );
 }
 
 fn test_config_with_custom_argon2() -> Config {
@@ -925,7 +933,10 @@ async fn post_json_hdr<T: DeserializeOwned>(
     let status = res.status();
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let parsed: T = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!("解析响应失败: {e}, body={}", String::from_utf8_lossy(&bytes))
+        panic!(
+            "解析响应失败: {e}, body={}",
+            String::from_utf8_lossy(&bytes)
+        )
     });
     (status, parsed)
 }
@@ -959,7 +970,10 @@ fn test_config_with_both_bindings() -> Config {
 #[tokio::test]
 async fn e2e_ip_binding_matches() {
     let app = build_router(
-        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_ip_binding(),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1001,7 +1015,10 @@ async fn e2e_ip_binding_matches() {
 #[tokio::test]
 async fn ip_binding_mismatch_rejected() {
     let app = build_router(
-        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_ip_binding(),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1041,7 +1058,10 @@ async fn ip_binding_mismatch_rejected() {
 #[tokio::test]
 async fn ip_binding_missing_client_ip_rejected() {
     let app = build_router(
-        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_ip_binding(),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1073,18 +1093,17 @@ async fn ip_binding_missing_client_ip_rejected() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(!sv.success);
-    assert!(sv
-        .error
-        .as_deref()
-        .unwrap_or("")
-        .contains("IP 绑定"));
+    assert!(sv.error.as_deref().unwrap_or("").contains("IP 绑定"));
 }
 
 /// IP 绑定开启 → /verify 无法识别 IP → 400
 #[tokio::test]
 async fn ip_binding_missing_ip_at_verify_rejected() {
     let app = build_router(
-        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_ip_binding(),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1108,7 +1127,10 @@ async fn ip_binding_missing_ip_at_verify_rejected() {
 #[tokio::test]
 async fn e2e_ua_binding_matches() {
     let app = build_router(
-        AppState::new(test_config_with_ua_binding(), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_ua_binding(),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1144,7 +1166,10 @@ async fn e2e_ua_binding_matches() {
 #[tokio::test]
 async fn ua_binding_missing_rejected() {
     let app = build_router(
-        AppState::new(test_config_with_ua_binding(), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_ua_binding(),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1172,18 +1197,17 @@ async fn ua_binding_missing_rejected() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(!sv.success);
-    assert!(sv
-        .error
-        .as_deref()
-        .unwrap_or("")
-        .contains("UA 绑定"));
+    assert!(sv.error.as_deref().unwrap_or("").contains("UA 绑定"));
 }
 
 /// IP + UA 双绑定 → 全部匹配 → 通过
 #[tokio::test]
 async fn e2e_ip_and_ua_binding_both_match() {
     let app = build_router(
-        AppState::new(test_config_with_both_bindings(), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_both_bindings(),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1252,14 +1276,20 @@ async fn no_binding_extra_fields_ignored() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(sv.success, "未绑定的 site 不应该因 client_ip/UA 不一致而失败");
+    assert!(
+        sv.success,
+        "未绑定的 site 不应该因 client_ip/UA 不一致而失败"
+    );
 }
 
 /// 非法 client_ip 字符串 → 绑定的 site 应当返回失败并给出明确 error
 #[tokio::test]
 async fn ip_binding_invalid_client_ip_rejected() {
     let app = build_router(
-        AppState::new(test_config_with_ip_binding(), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_ip_binding(),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1292,11 +1322,7 @@ async fn ip_binding_invalid_client_ip_rejected() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(!sv.success);
-    assert!(sv
-        .error
-        .as_deref()
-        .unwrap_or("")
-        .contains("client_ip"));
+    assert!(sv.error.as_deref().unwrap_or("").contains("client_ip"));
 }
 
 // ───────────── v1.5.0 服务端密钥与审计硬化 ─────────────
@@ -1307,7 +1333,8 @@ fn test_config_v1_5_hashed() -> Config {
     let master = cfg.secret.clone();
     let site = cfg.sites.get_mut("pk_test").unwrap();
     // 在测试里手动做 hash，模拟 Config::load 的启动迁移
-    site.secret_key = captcha_server::site_secret::hash("sk_test_secret_at_least_16_bytes", &master);
+    site.secret_key =
+        captcha_server::site_secret::hash("sk_test_secret_at_least_16_bytes", &master);
     site.secret_key_hashed = true;
     cfg
 }
@@ -1415,14 +1442,8 @@ async fn dual_key_rotation_rejects_unknown_secret() {
 
     // 用完全无关的第三方 key 签 token
     let alien: &[u8] = b"alien-secret-key-not-in-rotation-at-least-32-bytes!";
-    let (token_str, _) = captcha_server::token::generate(
-        "alien-cid-1",
-        "pk_test",
-        300,
-        alien,
-        None,
-        None,
-    );
+    let (token_str, _) =
+        captcha_server::token::generate("alien-cid-1", "pk_test", 300, alien, None, None);
 
     let (status, sv): (_, SiteVerifyResp) = post_json(
         &app,
@@ -1434,7 +1455,10 @@ async fn dual_key_rotation_rejects_unknown_secret() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(!sv.success, "既非 current 也非 previous 签的 token 必须拒绝");
+    assert!(
+        !sv.success,
+        "既非 current 也非 previous 签的 token 必须拒绝"
+    );
 }
 
 #[tokio::test]
@@ -1544,7 +1568,10 @@ struct AuditListResp {
 async fn audit_list_records_site_create() {
     let token = "admin-token-sample-at-least-16-chars";
     let app = build_router(
-        AppState::new(test_config_with_admin(token), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_admin(token),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1584,7 +1611,10 @@ async fn audit_list_records_site_create() {
 async fn admin_login_fail_recorded_in_audit() {
     let token = "admin-token-sample-at-least-16-chars";
     let app = build_router(
-        AppState::new(test_config_with_admin(token), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_admin(token),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1605,10 +1635,7 @@ async fn admin_login_fail_recorded_in_audit() {
     let (status, audit_resp): (_, AuditListResp) =
         get_json_auth(&app, "/admin/api/audit?action=login.fail", token).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        audit_resp.total >= 1,
-        "login.fail 应当至少有 1 条记录"
-    );
+    assert!(audit_resp.total >= 1, "login.fail 应当至少有 1 条记录");
     assert!(
         audit_resp.entries.iter().all(|e| e.action == "login.fail"),
         "过滤应只返回 login.fail"
@@ -1619,7 +1646,10 @@ async fn admin_login_fail_recorded_in_audit() {
 async fn admin_ban_after_many_failures_returns_429() {
     let token = "admin-token-ban-test-long-enough!!!!";
     let app = build_router(
-        AppState::new(test_config_with_admin(token), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_admin(token),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1630,7 +1660,10 @@ async fn admin_ban_after_many_failures_returns_429() {
         let req = Request::builder()
             .method("GET")
             .uri("/admin/api/sites")
-            .header("authorization", format!("Bearer wrong-{i}-xxxxxxxxxxxxxxxx"))
+            .header(
+                "authorization",
+                format!("Bearer wrong-{i}-xxxxxxxxxxxxxxxx"),
+            )
             .header("x-forwarded-for", "203.0.113.99")
             .body(Body::empty())
             .unwrap();
@@ -1653,7 +1686,10 @@ async fn admin_ban_after_many_failures_returns_429() {
 async fn create_site_returns_plaintext_secret_key_once() {
     let token = "admin-token-sample-at-least-16-chars";
     let app = build_router(
-        AppState::new(test_config_with_admin(token), captcha_server::db::open_memory()),
+        AppState::new(
+            test_config_with_admin(token),
+            captcha_server::db::open_memory(),
+        ),
         None,
         None,
     );
@@ -1673,8 +1709,7 @@ async fn create_site_returns_plaintext_secret_key_once() {
     assert_ne!(plain_secret, "(hashed)");
 
     // list 接口返回 "(hashed)" 占位（明文不再可从管理面板取回）
-    let (_, sites): (_, serde_json::Value) =
-        get_json_auth(&app, "/admin/api/sites", token).await;
+    let (_, sites): (_, serde_json::Value) = get_json_auth(&app, "/admin/api/sites", token).await;
     let arr = sites.as_array().unwrap();
     let this = arr.iter().find(|s| s["key"] == site_key).unwrap();
     assert_eq!(this["secret_key"], "(hashed)");

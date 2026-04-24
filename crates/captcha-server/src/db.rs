@@ -115,9 +115,7 @@ pub fn migrate(db: &Db) {
         ("argon2_t_cost", "2"),
         ("argon2_p_cost", "1"),
     ] {
-        let sql = format!(
-            "ALTER TABLE sites ADD COLUMN {col} INTEGER NOT NULL DEFAULT {default}"
-        );
+        let sql = format!("ALTER TABLE sites ADD COLUMN {col} INTEGER NOT NULL DEFAULT {default}");
         // 列已存在时 ALTER 会报错，静默忽略
         let _ = conn.execute(&sql, []);
     }
@@ -145,15 +143,14 @@ pub fn migrate_site_secret_keys(db: &Db, master: &[u8]) {
 
     // 收集需要迁移的行
     let rows: Vec<(String, String)> = {
-        let mut stmt = match conn
-            .prepare("SELECT key, secret_key FROM sites WHERE secret_key_hashed = 0")
-        {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("secret_key 迁移查询失败: {e}");
-                return;
-            }
-        };
+        let mut stmt =
+            match conn.prepare("SELECT key, secret_key FROM sites WHERE secret_key_hashed = 0") {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("secret_key 迁移查询失败: {e}");
+                    return;
+                }
+            };
         let iter = match stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         }) {
@@ -713,14 +710,34 @@ mod tests {
         assert_eq!(loaded["pk_new"].argon2_m_cost, 8192);
         assert_eq!(loaded["pk_new"].argon2_t_cost, 3);
 
-        update_site_fields(&db, "pk_new", Some(20), None, Some(32768), None, None, None, None);
+        update_site_fields(
+            &db,
+            "pk_new",
+            Some(20),
+            None,
+            Some(32768),
+            None,
+            None,
+            None,
+            None,
+        );
         let loaded = load_sites(&db);
         assert_eq!(loaded["pk_new"].diff, 20);
         assert_eq!(loaded["pk_new"].argon2_m_cost, 32768);
         assert_eq!(loaded["pk_new"].argon2_t_cost, 3);
 
         // v1.4.0 新增：开关身份绑定
-        update_site_fields(&db, "pk_new", None, None, None, None, None, Some(true), Some(true));
+        update_site_fields(
+            &db,
+            "pk_new",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+            Some(true),
+        );
         let loaded = load_sites(&db);
         assert!(loaded["pk_new"].bind_token_to_ip);
         assert!(loaded["pk_new"].bind_token_to_ua);

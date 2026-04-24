@@ -92,7 +92,15 @@ pub fn spawn_record(
     let mj = meta_json.clone();
 
     tokio::task::spawn_blocking(move || {
-        record(&db, tp.as_deref(), action, t.as_deref(), ip_c.as_deref(), success, mj.as_deref());
+        record(
+            &db,
+            tp.as_deref(),
+            action,
+            t.as_deref(),
+            ip_c.as_deref(),
+            success,
+            mj.as_deref(),
+        );
     });
 
     // webhook fire-and-forget，失败仅记日志
