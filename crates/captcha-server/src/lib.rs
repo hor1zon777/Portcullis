@@ -6,6 +6,7 @@ pub mod metrics;
 pub mod rate_limit;
 pub mod risk;
 pub mod routes;
+pub mod site_secret;
 pub mod state;
 pub mod static_assets;
 pub mod store;

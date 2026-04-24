@@ -130,6 +130,24 @@ export interface SiteView {
   argon2_p_cost: number;
   bind_token_to_ip: boolean;
   bind_token_to_ua: boolean;
+  /** v1.5.0：secret_key 已 HMAC 化存储（只在创建时返回明文） */
+  secret_key_hashed: boolean;
+}
+
+export interface AuditEntry {
+  id: number;
+  ts: number;
+  token_prefix: string | null;
+  action: string;
+  target: string | null;
+  ip: string | null;
+  success: boolean;
+  meta_json: string | null;
+}
+
+export interface AuditList {
+  total: number;
+  entries: AuditEntry[];
 }
 
 export interface LogEntry {
@@ -207,4 +225,12 @@ export const api = {
     request<GenerateManifestKeyResult>('/manifest-pubkey/generate', { method: 'POST' }),
   revokeManifestKey: () =>
     request<{ ok: boolean; removed: boolean }>('/manifest-pubkey', { method: 'DELETE' }),
+  audit: (params?: { limit?: number; offset?: number; action?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+    if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+    if (params?.action) qs.set('action', params.action);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<AuditList>(`/audit${suffix}`);
+  },
 };

@@ -1,8 +1,114 @@
 # 升级指南
 
-> 最新版本：**v1.4.0**（CaptchaToken 客户端身份绑定 opt-in）
+> 最新版本：**v1.5.0**（服务端密钥与审计硬化）
 
 PoW CAPTCHA 的核心算法由客户端 WASM 与服务端共同执行，因此在 v1.2.x 之前**客户端与服务端必须编译自同一套 Argon2 参数**。v1.3.0 起，参数从 `challenge` 下发并由 HMAC 签名覆盖，客户端只需根据 challenge 内容动态构建 Argon2 实例，升级耦合大幅降低。
+
+---
+
+## v1.4.x → v1.5.0
+
+### 1. 核心改动
+
+| 变化 | 含义 |
+|------|------|
+| `sites.secret_key` 从明文改为 `HMAC-SHA256(CAPTCHA_SECRET, plain)` | DB 泄漏不再等于所有 secret_key 泄漏 |
+| 新增 `admin_audit` 表 + `/admin/api/audit` 端点 | 管理员操作可追溯；管理面板新增「审计」页 |
+| 新增 admin 失败 ban：连续 30 次失败触发 15 分钟 ban（HTTP 429） | 防暴力破解 admin_token |
+| `CAPTCHA_SECRET` 双 key 轮换（`CAPTCHA_SECRET_PREVIOUS`） | 无缝切换主密钥，已签发的 token 不失效 |
+| 新增 `CAPTCHA_ADMIN_WEBHOOK_URL`（Slack Incoming Webhook 兼容） | 关键操作外部通知 |
+
+### 2. ⚠️ 必读：`secret_key` hash 化是单向迁移
+
+v1.5.0 首次启动时，`migrate_site_secret_keys` 会把 `sites` 表里所有 `secret_key_hashed = 0` 的行做 `HMAC-SHA256(CAPTCHA_SECRET, plain)` 覆写。**一旦迁移完成，DB 里再也拿不回原始明文**——服务端只需要 hash 做比对就够了，但业务后端（main 站、老客户端等）持有的是明文 secret_key，仍要正常工作。
+
+**升级前务必：**
+
+1. 在 v1.4.x 运行状态下，导出所有站点的 `secret_key` 原文（从管理面板「站点」页点 Eye 图标可看到明文；或 `SELECT key, secret_key FROM sites;`）
+2. 保存到安全的**带外**位置（密码管理器、加密备份）
+3. 确认业务方后端已正确配置对应明文
+4. 再执行升级
+
+升级后管理面板的 Secret Key 列会固定显示 `(已哈希存储)`，**无法**再通过 UI 查看或复制原文。创建新站点时返回的明文**只显示一次**（本版本起 UI 自动复制到剪贴板并 toast 15 秒提示）。
+
+### 3. 升级步骤（默认场景）
+
+```bash
+docker compose pull captcha-server admin-ui nginx
+docker compose up -d
+```
+
+启动日志会打印：
+
+```
+INFO v1.5.0: 已将 N 个站点的 secret_key 迁移到 HMAC 存储
+```
+
+确认 N 与站点数一致，之后 siteverify 保持 100% 成功率即视为迁移正常。
+
+### 4. `CAPTCHA_SECRET` 轮换流程
+
+**不要直接替换**，否则所有 stored_hash 将失效，siteverify 全挂。正确流程：
+
+```bash
+# 第 1 步：把当前 secret 复制到 SECRET_PREVIOUS
+export CAPTCHA_SECRET_PREVIOUS="$(echo $CAPTCHA_SECRET)"
+# 第 2 步：生成新 secret
+export CAPTCHA_SECRET="$(./captcha-server gen-secret)"
+# 第 3 步：重启服务
+docker compose restart captcha-server
+```
+
+这个状态下：
+- 新发出的 challenge / token 用 `current` 签
+- 旧（未过期）token 仍能通过 `previous` 校验
+- 旧 stored_hash 仍能通过 `previous` 校验（site_secret::verify_any 覆盖 [current, previous]）
+
+**等 `token_ttl_secs`（默认 300s）窗口后**，所有旧 token 自然过期。此时：
+1. **重新生成所有站点的 secret_key**（管理面板「站点」→「编辑」→ 保存，内部会用新 master 重新 hash；或者 API 级更新）
+2. 业务方后端同步更换明文
+3. 删除 `CAPTCHA_SECRET_PREVIOUS` env → 重启服务
+
+### 5. 启用 admin webhook（可选）
+
+```toml
+# captcha.toml
+[server]
+admin_webhook_url = "https://hooks.slack.com/services/T0/B0/XXX"
+```
+
+或：
+
+```bash
+export CAPTCHA_ADMIN_WEBHOOK_URL="https://hooks.slack.com/services/..."
+```
+
+发送 payload 兼容 Slack 格式：
+
+```json
+{
+  "text": "[Portcullis] admin action: site.create success (ip=203.0.113.5, target=pk_abc)",
+  "action": "site.create",
+  "target": "pk_abc",
+  "ip": "203.0.113.5",
+  "success": true,
+  "meta": {"diff": 18, "bind_ip": false, "bind_ua": false},
+  "ts_ms": 1713960000000
+}
+```
+
+失败 fire-and-forget（2s 连接 + 3s 总超时），不影响主流程。
+
+### 6. 回滚到 v1.4.x
+
+v1.5.0 DB schema 向后兼容（旧二进制忽略 `secret_key_hashed` 列与 `admin_audit` 表）。但**一旦迁移过 secret_key，回滚后 siteverify 仍使用 hash 值与业务方明文比较 → 全挂**。
+
+**回滚前必须：**
+1. 在 v1.5.0 下手动 `UPDATE sites SET secret_key = '<原文>', secret_key_hashed = 0 WHERE key = 'pk_xxx';` 恢复明文（需要之前保留的原文备份）
+2. 每个站点都要做
+3. 再回滚镜像
+
+如果没有原文备份，**无法回滚**——只能在 v1.5.0 继续用，或删除全部站点重新创建。
 
 ---
 

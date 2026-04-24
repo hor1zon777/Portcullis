@@ -7,8 +7,16 @@ import { copyToClipboard } from '@/lib/utils';
 import { PageLoader } from '@/components/Spinner';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
-function SecretCell({ value }: { value: string }) {
+function SecretCell({ value, hashed }: { value: string; hashed?: boolean }) {
   const [visible, setVisible] = useState(false);
+  if (hashed) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+        <span className="font-mono italic">(已哈希存储)</span>
+        <span title="v1.5.0 起服务端只保留 HMAC，明文仅在创建时一次性返回；请在创建时保存" className="cursor-help">ⓘ</span>
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1 font-mono text-xs">
       <span className="select-all">{visible ? value : '••••••••••••••••'}</span>
@@ -73,7 +81,12 @@ export default function Sites() {
       qc.invalidateQueries({ queryKey: ['sites'] });
       setShowForm(false);
       setForm({ diff: 18, origins: '', m_cost: 19456, t_cost: 2, bind_ip: false, bind_ua: false });
-      toast.success(`站点 ${data.key} 创建成功`, { duration: 5000 });
+      // v1.5.0：明文 secret_key 仅在创建响应里一次性返回，必须让用户立即保存
+      copyToClipboard(data.secret_key);
+      toast.success(
+        `站点 ${data.key} 已创建。Secret Key 已复制到剪贴板，请立即保存 —— 服务端不会再返回明文。`,
+        { duration: 15000 }
+      );
     },
     onError: (e) => toast.error('创建失败: ' + (e as Error).message),
   });
@@ -177,7 +190,7 @@ export default function Sites() {
                       {copiedKey === s.key ? <Check size={12} className="text-success inline" /> : <Copy size={12} className="inline" />}
                     </button>
                   </td>
-                  <td><SecretCell value={s.secret_key} /></td>
+                  <td><SecretCell value={s.secret_key} hashed={s.secret_key_hashed} /></td>
                   <td>{editKey === s.key ? <input className="input w-20" type="number" min={8} max={28} value={editDiff} onChange={e => setEditDiff(Number(e.target.value) || 18)} /> : s.diff}</td>
                   <td>{editKey === s.key ? <input className="input w-24" type="number" min={8} max={65536} value={editMCost} onChange={e => setEditMCost(Number(e.target.value) || 19456)} /> : <span className="font-mono text-xs">{s.argon2_m_cost}</span>}</td>
                   <td>{editKey === s.key ? <input className="input w-16" type="number" min={1} max={10} value={editTCost} onChange={e => setEditTCost(Number(e.target.value) || 2)} /> : <span className="font-mono text-xs">{s.argon2_t_cost}</span>}</td>

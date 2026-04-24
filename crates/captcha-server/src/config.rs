@@ -62,11 +62,15 @@ struct AdminSection {
 struct ServerSection {
     bind: Option<String>,
     secret: Option<String>,
+    /// v1.5.0：旧密钥（轮换期间用于验证之前签发的 challenge/token）。
+    secret_previous: Option<String>,
     challenge_ttl_secs: Option<u64>,
     token_ttl_secs: Option<u64>,
     /// Ed25519 manifest 签名私钥 seed，base64 编码的 32 字节。
     /// 未配置时 `/sdk/manifest.json` 不带签名 header（Tier 2 opt-in）。
     manifest_signing_key: Option<String>,
+    /// v1.5.0：管理员关键操作的 webhook URL（Slack Incoming Webhook 兼容格式）。
+    admin_webhook_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +121,13 @@ pub struct SiteConfig {
     /// 浏览器更新可能导致请求失败；评估后再开。
     #[serde(default)]
     pub bind_token_to_ua: bool,
+    /// v1.5.0：`secret_key` 字段内部存储是否已 HMAC 化。
+    /// - `false`（默认，兼容 v1.4.x 行为）：字段保存明文，siteverify 时常数时间直接比较
+    /// - `true`：字段保存 `HMAC-SHA256(master, plain)` 的 base64
+    ///
+    /// 启动迁移期间会把所有 `false` 的行统一转为 `true`。
+    #[serde(default)]
+    pub secret_key_hashed: bool,
 }
 
 impl SiteConfig {
@@ -146,6 +157,9 @@ impl SiteConfig {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub secret: Vec<u8>,
+    /// v1.5.0：上一代密钥，用于验证轮换前签发的、尚未过期的 challenge/token。
+    /// 仅参与验证，永远不用于新签发。
+    pub secret_previous: Option<Vec<u8>>,
     pub bind: String,
     pub sites: HashMap<String, SiteConfig>,
     pub token_ttl_secs: u64,
@@ -156,6 +170,21 @@ pub struct Config {
     pub config_path: Option<PathBuf>,
     /// Ed25519 manifest 签名私钥的 32 字节 seed；None 时 manifest 不签名。
     pub manifest_signing_key: Option<[u8; 32]>,
+    /// v1.5.0：admin 关键操作（站点 CRUD / IP 封解 / manifest key / 密钥轮换）的 webhook URL。
+    pub admin_webhook_url: Option<String>,
+}
+
+impl Config {
+    /// 返回当前 + 上一代密钥的切片数组，用于验证。
+    /// 永远至少包含 `secret`；`secret_previous` 存在时追加到末尾。
+    pub fn verify_secrets(&self) -> Vec<&[u8]> {
+        let mut v: Vec<&[u8]> = Vec::with_capacity(2);
+        v.push(&self.secret);
+        if let Some(prev) = &self.secret_previous {
+            v.push(prev);
+        }
+        v
+    }
 }
 
 impl Config {
@@ -180,6 +209,21 @@ impl Config {
             "密钥长度必须 >= 32 字节，当前 {} 字节",
             secret.len()
         );
+
+        let secret_previous = std::env::var("CAPTCHA_SECRET_PREVIOUS")
+            .ok()
+            .or_else(|| ts.and_then(|s| s.secret_previous.clone()));
+        if let Some(ref prev) = secret_previous {
+            assert!(
+                prev.len() >= 32,
+                "CAPTCHA_SECRET_PREVIOUS 长度必须 >= 32 字节，当前 {} 字节",
+                prev.len()
+            );
+            assert_ne!(
+                prev, &secret,
+                "CAPTCHA_SECRET_PREVIOUS 不能与 CAPTCHA_SECRET 相同（轮换无意义）"
+            );
+        }
 
         let bind = cli
             .bind
@@ -214,6 +258,8 @@ impl Config {
                         .unwrap_or(captcha_core::challenge::DEFAULT_P_COST),
                     bind_token_to_ip: site.bind_token_to_ip.unwrap_or(false),
                     bind_token_to_ua: site.bind_token_to_ua.unwrap_or(false),
+                    // TOML 输入永远是明文，稍后由 Config::load 整体做 hash 迁移
+                    secret_key_hashed: false,
                 };
                 if let Err(e) = sc.validate_argon2_params() {
                     panic!("站点 '{}' Argon2 参数无效: {e}", site.key);
@@ -234,6 +280,21 @@ impl Config {
                 key
             );
         }
+
+        // v1.5.0：启动时把所有 `secret_key_hashed = false` 的 SiteConfig 转成 hash 存储。
+        // 对 TOML / env / CAPTCHA_SITES 输入统一执行这一步，让内存中的 SiteConfig
+        // 永远只保留 hash，降低进程内存 dump 泄漏风险。
+        let master_secret = secret.as_bytes();
+        let sites: HashMap<String, SiteConfig> = sites
+            .into_iter()
+            .map(|(k, mut sc)| {
+                if !sc.secret_key_hashed {
+                    sc.secret_key = crate::site_secret::hash(&sc.secret_key, master_secret);
+                    sc.secret_key_hashed = true;
+                }
+                (k, sc)
+            })
+            .collect();
 
         let challenge_ttl_secs = std::env::var("CAPTCHA_CHALLENGE_TTL_SECS")
             .ok()
@@ -267,8 +328,19 @@ impl Config {
                 })
             });
 
+        let admin_webhook_url = std::env::var("CAPTCHA_ADMIN_WEBHOOK_URL")
+            .ok()
+            .or_else(|| ts.and_then(|s| s.admin_webhook_url.clone()));
+        if let Some(ref u) = admin_webhook_url {
+            assert!(
+                u.starts_with("http://") || u.starts_with("https://"),
+                "admin_webhook_url 必须以 http:// 或 https:// 开头，当前 '{u}'"
+            );
+        }
+
         Self {
             secret: secret.into_bytes(),
+            secret_previous: secret_previous.map(|s| s.into_bytes()),
             bind,
             sites,
             token_ttl_secs,
@@ -278,6 +350,7 @@ impl Config {
             db_path,
             config_path,
             manifest_signing_key,
+            admin_webhook_url,
         }
     }
 
@@ -336,6 +409,13 @@ token_ttl_secs = 300
 # 未配置时 /sdk/manifest.json 不带 X-Portcullis-Signature 响应头。
 # 用 `captcha-server gen-manifest-key` 生成一对密钥。
 # manifest_signing_key = "<base64>"
+# v1.5.0：旧密钥（轮换期间，用于验证未过期的 token/challenge）。
+# 推荐流程：把当前 secret 复制到 secret_previous，再生成新 secret，
+# 待所有旧 token 到期（默认 300s）后再删除 secret_previous。
+# secret_previous = "<上一代 secret>"
+# v1.5.0：admin 关键操作 webhook（Slack Incoming Webhook 兼容格式）。
+# 留空时不发送。
+# admin_webhook_url = "https://hooks.slack.com/services/xxx"
 
 [[sites]]
 key = "pk_example"

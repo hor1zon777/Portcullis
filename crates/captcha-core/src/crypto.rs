@@ -20,6 +20,19 @@ pub fn verify_sig(data: &[u8], sig: &[u8; 32], secret: &[u8]) -> bool {
     expected.ct_eq(sig).into()
 }
 
+/// 尝试多把密钥验证签名，任一成功即算通过（用于 v1.5.0 双 key 轮换）。
+///
+/// 对每把 key 都跑完整的 `verify_sig`（内部为常数时间比较），
+/// 因此不泄漏"哪把 key 命中"的侧信道。当 `secrets` 为空时返回 `false`。
+pub fn verify_sig_any(data: &[u8], sig: &[u8; 32], secrets: &[&[u8]]) -> bool {
+    let mut ok = false;
+    for s in secrets {
+        // 使用 `|` 而非 `||`，避免短路使不同 key 的总耗时差异被观察到。
+        ok |= verify_sig(data, sig, s);
+    }
+    ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,5 +70,54 @@ mod tests {
         let sig1 = sign(b"data", b"key");
         let sig2 = sign(b"data", b"key");
         assert_eq!(sig1, sig2);
+    }
+
+    #[test]
+    fn verify_any_accepts_current() {
+        let data = b"payload";
+        let sig = sign(data, b"current-secret");
+        assert!(verify_sig_any(
+            data,
+            &sig,
+            &[b"current-secret", b"previous-secret"]
+        ));
+    }
+
+    #[test]
+    fn verify_any_accepts_previous() {
+        let data = b"payload";
+        let sig = sign(data, b"previous-secret");
+        assert!(verify_sig_any(
+            data,
+            &sig,
+            &[b"current-secret", b"previous-secret"]
+        ));
+    }
+
+    #[test]
+    fn verify_any_rejects_unknown() {
+        let data = b"payload";
+        let sig = sign(data, b"alien-key");
+        assert!(!verify_sig_any(
+            data,
+            &sig,
+            &[b"current-secret", b"previous-secret"]
+        ));
+    }
+
+    #[test]
+    fn verify_any_empty_slice_rejects() {
+        let sig = sign(b"payload", b"key");
+        assert!(!verify_sig_any(b"payload", &sig, &[]));
+    }
+
+    #[test]
+    fn verify_any_single_key_equivalent_to_verify_sig() {
+        let data = b"payload";
+        let sig = sign(data, b"only-key");
+        assert_eq!(
+            verify_sig(data, &sig, b"only-key"),
+            verify_sig_any(data, &sig, &[b"only-key"])
+        );
     }
 }

@@ -26,11 +26,13 @@ fn test_config() -> Config {
             argon2_p_cost: captcha_core::challenge::LEGACY_P_COST,
             bind_token_to_ip: false,
             bind_token_to_ua: false,
+            secret_key_hashed: false,
         },
     );
 
     Config {
         secret: b"test-secret-key-must-be-at-least-32-bytes!!!".to_vec(),
+        secret_previous: None,
         bind: "127.0.0.1:0".to_string(),
         sites,
         token_ttl_secs: 300,
@@ -40,6 +42,7 @@ fn test_config() -> Config {
         db_path: std::path::PathBuf::from(":memory:"),
         config_path: None,
         manifest_signing_key: None,
+        admin_webhook_url: None,
     }
 }
 
@@ -816,6 +819,7 @@ fn test_config_with_custom_argon2() -> Config {
             argon2_p_cost: 1,
             bind_token_to_ip: false,
             bind_token_to_ua: false,
+            secret_key_hashed: false,
         },
     );
     cfg
@@ -1293,4 +1297,386 @@ async fn ip_binding_invalid_client_ip_rejected() {
         .as_deref()
         .unwrap_or("")
         .contains("client_ip"));
+}
+
+// ───────────── v1.5.0 服务端密钥与审计硬化 ─────────────
+
+/// 构造 v1.5.0 风格 config：secret_key 已 HMAC 化，模拟启动迁移后的状态。
+fn test_config_v1_5_hashed() -> Config {
+    let mut cfg = test_config();
+    let master = cfg.secret.clone();
+    let site = cfg.sites.get_mut("pk_test").unwrap();
+    // 在测试里手动做 hash，模拟 Config::load 的启动迁移
+    site.secret_key = captcha_server::site_secret::hash("sk_test_secret_at_least_16_bytes", &master);
+    site.secret_key_hashed = true;
+    cfg
+}
+
+#[tokio::test]
+async fn siteverify_accepts_hashed_secret_key() {
+    let app = build_router(
+        AppState::new(test_config_v1_5_hashed(), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    let (_, ch): (_, ChallengeResp) =
+        post_json(&app, "/api/v1/challenge", json!({ "site_key": "pk_test" })).await;
+    let (nonce, _) = pow::solve(&ch.challenge, 1_000_000, 0, |_| {}).expect("solve 失败");
+    let (_, v): (_, VerifyResp) = post_json(
+        &app,
+        "/api/v1/verify",
+        json!({ "challenge": ch.challenge, "sig": ch.sig, "nonce": nonce }),
+    )
+    .await;
+
+    // 业务后端持有明文 secret_key，调 siteverify 应成功（服务端 HMAC 再比对）
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": v.captcha_token,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(sv.success, "hash 存储 + 明文 siteverify 应通过");
+
+    // 篡改明文 secret_key 应被拒
+    let (status, sv2): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": "dummy.dummy",
+            "secret_key": "wrong-secret",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!sv2.success);
+}
+
+#[tokio::test]
+async fn dual_key_rotation_accepts_previous_signed_token() {
+    // 手工流程：
+    // 1. 轮换 CAPTCHA_SECRET: 把原始 master 作为 previous（保留 stored_hash 的有效性），
+    //    生成新 current
+    // 2. 用 previous 直接签 token（模拟轮换前发出、尚未过期）
+    // 3. siteverify 应当接受
+    let mut cfg = test_config_v1_5_hashed();
+    let original_master = cfg.secret.clone();
+    let new_current: Vec<u8> = b"new-current-secret-rotation-at-least-32-bytes-long!".to_vec();
+    cfg.secret = new_current;
+    cfg.secret_previous = Some(original_master.clone());
+
+    let app = build_router(
+        AppState::new(cfg, captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    // 手工用 previous 签发 token
+    let (token_str, _exp) = captcha_server::token::generate(
+        "manual-cid-1",
+        "pk_test",
+        300,
+        &original_master,
+        None,
+        None,
+    );
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": token_str,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(sv.success, "轮换后 previous 签的 token 仍应被接受");
+}
+
+#[tokio::test]
+async fn dual_key_rotation_rejects_unknown_secret() {
+    let mut cfg = test_config_v1_5_hashed();
+    let original_master = cfg.secret.clone();
+    let new_current: Vec<u8> = b"new-current-secret-rotation-at-least-32-bytes-long!".to_vec();
+    cfg.secret = new_current;
+    cfg.secret_previous = Some(original_master);
+
+    let app = build_router(
+        AppState::new(cfg, captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    // 用完全无关的第三方 key 签 token
+    let alien: &[u8] = b"alien-secret-key-not-in-rotation-at-least-32-bytes!";
+    let (token_str, _) = captcha_server::token::generate(
+        "alien-cid-1",
+        "pk_test",
+        300,
+        alien,
+        None,
+        None,
+    );
+
+    let (status, sv): (_, SiteVerifyResp) = post_json(
+        &app,
+        "/api/v1/siteverify",
+        json!({
+            "token": token_str,
+            "secret_key": "sk_test_secret_at_least_16_bytes",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!sv.success, "既非 current 也非 previous 签的 token 必须拒绝");
+}
+
+#[tokio::test]
+async fn v1_5_site_secret_migration_db_level() {
+    let db = captcha_server::db::open_memory();
+    captcha_server::db::migrate(&db);
+
+    // 直接插入一条明文 secret_key（模拟 v1.4.x 遗留行）
+    let mut plaintext_site = captcha_server::config::SiteConfig {
+        secret_key: "sk_legacy_plain_1234".to_string(),
+        diff: 18,
+        origins: vec![],
+        argon2_m_cost: 19456,
+        argon2_t_cost: 2,
+        argon2_p_cost: 1,
+        bind_token_to_ip: false,
+        bind_token_to_ua: false,
+        secret_key_hashed: false,
+    };
+    captcha_server::db::insert_site(&db, "pk_legacy", &plaintext_site);
+
+    // 触发 v1.5.0 迁移
+    let master = b"master-secret-for-migration-32-bytes!";
+    captcha_server::db::migrate_site_secret_keys(&db, master);
+
+    // 重新加载
+    let loaded = captcha_server::db::load_sites(&db);
+    let row = loaded.get("pk_legacy").expect("站点应存在");
+    assert!(row.secret_key_hashed, "迁移后应标记为 hashed");
+    assert_ne!(row.secret_key, "sk_legacy_plain_1234", "明文已被覆盖");
+
+    let expected = captcha_server::site_secret::hash("sk_legacy_plain_1234", master);
+    assert_eq!(row.secret_key, expected, "存储的应为 HMAC 的 base64");
+
+    // 幂等性：再次迁移不应改变
+    plaintext_site.secret_key = row.secret_key.clone();
+    plaintext_site.secret_key_hashed = true;
+    captcha_server::db::migrate_site_secret_keys(&db, master);
+    let loaded2 = captcha_server::db::load_sites(&db);
+    assert_eq!(loaded2["pk_legacy"].secret_key, row.secret_key);
+}
+
+fn test_config_with_admin(admin_token: &str) -> Config {
+    let mut cfg = test_config_v1_5_hashed();
+    cfg.admin_token = Some(admin_token.to_string());
+    cfg
+}
+
+async fn post_json_auth<T: DeserializeOwned>(
+    app: &axum::Router,
+    path: &str,
+    body: serde_json::Value,
+    token: &str,
+) -> (StatusCode, T) {
+    post_json_hdr(
+        app,
+        path,
+        body,
+        &[("authorization", &format!("Bearer {token}"))],
+    )
+    .await
+}
+
+async fn get_json_auth<T: DeserializeOwned>(
+    app: &axum::Router,
+    path: &str,
+    token: &str,
+) -> (StatusCode, T) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let parsed: T = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+        panic!(
+            "解析响应失败: {e}, body={}",
+            String::from_utf8_lossy(&bytes)
+        )
+    });
+    (status, parsed)
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct AuditEntryView {
+    #[allow(dead_code)]
+    id: i64,
+    action: String,
+    target: Option<String>,
+    #[allow(dead_code)]
+    ip: Option<String>,
+    success: bool,
+    #[allow(dead_code)]
+    meta_json: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct AuditListResp {
+    total: i64,
+    entries: Vec<AuditEntryView>,
+}
+
+#[tokio::test]
+async fn audit_list_records_site_create() {
+    let token = "admin-token-sample-at-least-16-chars";
+    let app = build_router(
+        AppState::new(test_config_with_admin(token), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    // 通过 admin API 创建一个新站点
+    let (status, _): (_, serde_json::Value) = post_json_auth(
+        &app,
+        "/admin/api/sites",
+        json!({"diff": 10, "origins": []}),
+        token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // audit endpoint 应当至少记录一条 site.create
+    // 由于写入是 spawn_blocking，需要一点时间；简单等一下
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let (status, audit_resp): (_, AuditListResp) =
+        get_json_auth(&app, "/admin/api/audit?limit=50", token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(audit_resp.total >= 1);
+    let create_entry = audit_resp
+        .entries
+        .iter()
+        .find(|e| e.action == "site.create")
+        .expect("应记录 site.create");
+    assert!(create_entry.success);
+    assert!(create_entry
+        .target
+        .as_deref()
+        .unwrap_or("")
+        .starts_with("pk_"));
+}
+
+#[tokio::test]
+async fn admin_login_fail_recorded_in_audit() {
+    let token = "admin-token-sample-at-least-16-chars";
+    let app = build_router(
+        AppState::new(test_config_with_admin(token), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    // 用错误 token 调一个 admin endpoint
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/sites")
+        .header("authorization", "Bearer WRONG-TOKEN-xxxxxxxxxxxxxxxxxxx")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // 查审计（用合法 token）
+    let (status, audit_resp): (_, AuditListResp) =
+        get_json_auth(&app, "/admin/api/audit?action=login.fail", token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        audit_resp.total >= 1,
+        "login.fail 应当至少有 1 条记录"
+    );
+    assert!(
+        audit_resp.entries.iter().all(|e| e.action == "login.fail"),
+        "过滤应只返回 login.fail"
+    );
+}
+
+#[tokio::test]
+async fn admin_ban_after_many_failures_returns_429() {
+    let token = "admin-token-ban-test-long-enough!!!!";
+    let app = build_router(
+        AppState::new(test_config_with_admin(token), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    // 失败阈值为 30（rate_limit.rs::ADMIN_FAIL_BAN_THRESHOLD）。
+    // 连续 30 次错误 → 第 30 次起进入 ban。
+    for i in 0..30 {
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/api/sites")
+            .header("authorization", format!("Bearer wrong-{i}-xxxxxxxxxxxxxxxx"))
+            .header("x-forwarded-for", "203.0.113.99")
+            .body(Body::empty())
+            .unwrap();
+        let _ = app.clone().oneshot(req).await.unwrap();
+    }
+
+    // 第 31 次应该被 ban（返回 429）
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/sites")
+        .header("authorization", "Bearer yet-another-wrong-xxxxxxxxxxxxxxx")
+        .header("x-forwarded-for", "203.0.113.99")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn create_site_returns_plaintext_secret_key_once() {
+    let token = "admin-token-sample-at-least-16-chars";
+    let app = build_router(
+        AppState::new(test_config_with_admin(token), captcha_server::db::open_memory()),
+        None,
+        None,
+    );
+
+    // 创建时返回明文
+    let (status, body): (_, serde_json::Value) = post_json_auth(
+        &app,
+        "/admin/api/sites",
+        json!({"diff": 10, "origins": []}),
+        token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let site_key = body["key"].as_str().unwrap().to_string();
+    let plain_secret = body["secret_key"].as_str().unwrap().to_string();
+    assert!(!plain_secret.is_empty());
+    assert_ne!(plain_secret, "(hashed)");
+
+    // list 接口返回 "(hashed)" 占位（明文不再可从管理面板取回）
+    let (_, sites): (_, serde_json::Value) =
+        get_json_auth(&app, "/admin/api/sites", token).await;
+    let arr = sites.as_array().unwrap();
+    let this = arr.iter().find(|s| s["key"] == site_key).unwrap();
+    assert_eq!(this["secret_key"], "(hashed)");
+    assert_eq!(this["secret_key_hashed"], true);
 }

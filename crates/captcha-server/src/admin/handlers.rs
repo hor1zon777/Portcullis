@@ -1,5 +1,5 @@
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -7,6 +7,7 @@ use base64::Engine as _;
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
+use crate::admin::audit;
 use crate::state::AppState;
 
 // ──────── GET /admin/api/stats ────────
@@ -41,6 +42,8 @@ pub async fn stats(State(state): State<AppState>) -> Json<StatsResponse> {
 #[derive(Serialize)]
 pub struct SiteView {
     key: String,
+    /// v1.5.0：`secret_key` 明文仅在创建时一次性返回，列表接口中固定为
+    /// `"(hashed)"` 占位字符串，前端据此提醒用户务必在创建时保存原文。
     secret_key: String,
     diff: u8,
     origins: Vec<String>,
@@ -49,6 +52,7 @@ pub struct SiteView {
     argon2_p_cost: u32,
     bind_token_to_ip: bool,
     bind_token_to_ua: bool,
+    secret_key_hashed: bool,
 }
 
 pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
@@ -58,7 +62,12 @@ pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
         .iter()
         .map(|(k, v)| SiteView {
             key: k.clone(),
-            secret_key: v.secret_key.clone(),
+            secret_key: if v.secret_key_hashed {
+                "(hashed)".to_string()
+            } else {
+                // 理论上启动迁移后不会出现；仅兜底
+                v.secret_key.clone()
+            },
             diff: v.diff,
             origins: v.origins.clone(),
             argon2_m_cost: v.argon2_m_cost,
@@ -66,6 +75,7 @@ pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
             argon2_p_cost: v.argon2_p_cost,
             bind_token_to_ip: v.bind_token_to_ip,
             bind_token_to_ua: v.bind_token_to_ua,
+            secret_key_hashed: v.secret_key_hashed,
         })
         .collect();
     Json(sites)
@@ -101,14 +111,20 @@ fn gen_secret_key() -> String {
 
 pub async fn create_site(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CreateSiteRequest>,
 ) -> Response {
+    let token_prefix = audit::token_prefix_from_headers(&headers);
+    let ip = audit::client_ip_from_headers(&headers);
+
     let mut config = (*state.config.load_full()).clone();
 
     let site_key = gen_site_key();
-    let secret_key = gen_secret_key();
+    let secret_key_plain = gen_secret_key();
+    let secret_key_hash =
+        crate::site_secret::hash(&secret_key_plain, &state.config.load().secret);
     let new_site = crate::config::SiteConfig {
-        secret_key: secret_key.clone(),
+        secret_key: secret_key_hash,
         diff: req.diff,
         origins: req.origins,
         argon2_m_cost: req
@@ -122,8 +138,18 @@ pub async fn create_site(
             .unwrap_or(captcha_core::challenge::DEFAULT_P_COST),
         bind_token_to_ip: req.bind_token_to_ip.unwrap_or(false),
         bind_token_to_ua: req.bind_token_to_ua.unwrap_or(false),
+        secret_key_hashed: true,
     };
     if let Err(e) = new_site.validate_argon2_params() {
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_SITE_CREATE,
+            None,
+            ip,
+            false,
+            Some(format!(r#"{{"error":{}}}"#, serde_json::to_string(&e).unwrap_or_default())),
+        );
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e})),
@@ -133,18 +159,50 @@ pub async fn create_site(
     crate::db::insert_site(&state.db, &site_key, &new_site);
     config.sites.insert(site_key.clone(), new_site);
     state.reload_config(config).await;
+
+    audit::spawn_record(
+        &state,
+        token_prefix,
+        audit::ACTION_SITE_CREATE,
+        Some(site_key.clone()),
+        ip,
+        true,
+        Some(format!(
+            r#"{{"diff":{},"bind_ip":{},"bind_ua":{}}}"#,
+            req.diff,
+            req.bind_token_to_ip.unwrap_or(false),
+            req.bind_token_to_ua.unwrap_or(false),
+        )),
+    );
+
     (
         StatusCode::CREATED,
-        Json(serde_json::json!({"ok": true, "key": site_key, "secret_key": secret_key})),
+        Json(serde_json::json!({"ok": true, "key": site_key, "secret_key": secret_key_plain})),
     )
         .into_response()
 }
 
 // ──────── DELETE /admin/api/sites/:key ────────
 
-pub async fn delete_site(State(state): State<AppState>, Path(key): Path<String>) -> Response {
+pub async fn delete_site(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+) -> Response {
+    let token_prefix = audit::token_prefix_from_headers(&headers);
+    let ip = audit::client_ip_from_headers(&headers);
+
     let mut config = (*state.config.load_full()).clone();
     if config.sites.remove(&key).is_none() {
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_SITE_DELETE,
+            Some(key),
+            ip,
+            false,
+            Some(r#"{"error":"not_found"}"#.to_string()),
+        );
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "站点不存在"})),
@@ -153,6 +211,17 @@ pub async fn delete_site(State(state): State<AppState>, Path(key): Path<String>)
     }
     crate::db::delete_site(&state.db, &key);
     state.reload_config(config).await;
+
+    audit::spawn_record(
+        &state,
+        token_prefix,
+        audit::ACTION_SITE_DELETE,
+        Some(key),
+        ip,
+        true,
+        None,
+    );
+
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
@@ -172,11 +241,24 @@ pub struct UpdateSiteRequest {
 
 pub async fn update_site(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(key): Path<String>,
     Json(req): Json<UpdateSiteRequest>,
 ) -> Response {
+    let token_prefix = audit::token_prefix_from_headers(&headers);
+    let ip = audit::client_ip_from_headers(&headers);
+
     let mut config = (*state.config.load_full()).clone();
     let Some(site) = config.sites.get_mut(&key) else {
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_SITE_UPDATE,
+            Some(key),
+            ip,
+            false,
+            Some(r#"{"error":"not_found"}"#.to_string()),
+        );
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "站点不存在"})),
@@ -205,6 +287,15 @@ pub async fn update_site(
         site.bind_token_to_ua = b;
     }
     if let Err(e) = site.validate_argon2_params() {
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_SITE_UPDATE,
+            Some(key),
+            ip,
+            false,
+            Some(format!(r#"{{"error":{}}}"#, serde_json::to_string(&e).unwrap_or_default())),
+        );
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e})),
@@ -223,6 +314,17 @@ pub async fn update_site(
         req.bind_token_to_ua,
     );
     state.reload_config(config).await;
+
+    audit::spawn_record(
+        &state,
+        token_prefix,
+        audit::ACTION_SITE_UPDATE,
+        Some(key),
+        ip,
+        true,
+        None,
+    );
+
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
@@ -257,13 +359,40 @@ pub struct BlockRequest {
     pub ip: String,
 }
 
-pub async fn block_ip(State(state): State<AppState>, Json(req): Json<BlockRequest>) -> Response {
+pub async fn block_ip(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<BlockRequest>,
+) -> Response {
+    let token_prefix = audit::token_prefix_from_headers(&headers);
+    let ip_ = audit::client_ip_from_headers(&headers);
+
     let mut risk = state.risk.write().await;
     if risk.add_blocked(&req.ip) {
         crate::db::insert_ip_list(&state.db, &req.ip, "blocked");
         tracing::info!(ip = %req.ip, "管理员封禁 IP");
+        drop(risk);
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_IP_BLOCK,
+            Some(req.ip.clone()),
+            ip_,
+            true,
+            None,
+        );
         Json(serde_json::json!({"ok": true})).into_response()
     } else {
+        drop(risk);
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_IP_BLOCK,
+            Some(req.ip.clone()),
+            ip_,
+            false,
+            Some(r#"{"error":"invalid_or_duplicate"}"#.to_string()),
+        );
         (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "无效 IP 或已在黑名单"})),
@@ -274,13 +403,40 @@ pub async fn block_ip(State(state): State<AppState>, Json(req): Json<BlockReques
 
 // ──────── DELETE /admin/api/risk/block ────────
 
-pub async fn unblock_ip(State(state): State<AppState>, Json(req): Json<BlockRequest>) -> Response {
+pub async fn unblock_ip(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<BlockRequest>,
+) -> Response {
+    let token_prefix = audit::token_prefix_from_headers(&headers);
+    let ip_ = audit::client_ip_from_headers(&headers);
+
     let mut risk = state.risk.write().await;
     if risk.remove_blocked(&req.ip) {
         crate::db::delete_ip_list(&state.db, &req.ip, "blocked");
         tracing::info!(ip = %req.ip, "管理员解封 IP");
+        drop(risk);
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_IP_UNBLOCK,
+            Some(req.ip.clone()),
+            ip_,
+            true,
+            None,
+        );
         Json(serde_json::json!({"ok": true})).into_response()
     } else {
+        drop(risk);
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_IP_UNBLOCK,
+            Some(req.ip.clone()),
+            ip_,
+            false,
+            Some(r#"{"error":"not_found"}"#.to_string()),
+        );
         (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "IP 不在黑名单中"})),
@@ -333,7 +489,10 @@ pub struct GenerateManifestKeyResponse {
     first_time: bool,
 }
 
-pub async fn generate_manifest_key(State(state): State<AppState>) -> Response {
+pub async fn generate_manifest_key(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let token_prefix = audit::token_prefix_from_headers(&headers);
+    let ip = audit::client_ip_from_headers(&headers);
+
     let first_time = {
         let cfg = state.config.load();
         cfg.manifest_signing_key.is_none()
@@ -342,6 +501,15 @@ pub async fn generate_manifest_key(State(state): State<AppState>) -> Response {
     let mut seed = [0u8; 32];
     if let Err(e) = getrandom::getrandom(&mut seed) {
         tracing::error!("manifest 签名 seed 生成失败: {e}");
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_MANIFEST_GENERATE,
+            None,
+            ip,
+            false,
+            Some(r#"{"error":"rng_failed"}"#.to_string()),
+        );
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "随机数生成失败"})),
@@ -359,6 +527,16 @@ pub async fn generate_manifest_key(State(state): State<AppState>) -> Response {
     let pk = SigningKey::from_bytes(&seed).verifying_key();
     tracing::info!(first_time, "管理面板生成新的 manifest 签名密钥");
 
+    audit::spawn_record(
+        &state,
+        token_prefix,
+        audit::ACTION_MANIFEST_GENERATE,
+        None,
+        ip,
+        true,
+        Some(format!(r#"{{"first_time":{first_time}}}"#)),
+    );
+
     Json(GenerateManifestKeyResponse {
         enabled: true,
         pubkey: B64.encode(pk.to_bytes()),
@@ -370,13 +548,26 @@ pub async fn generate_manifest_key(State(state): State<AppState>) -> Response {
 
 // ──────── DELETE /admin/api/manifest-pubkey ────────
 
-pub async fn revoke_manifest_key(State(state): State<AppState>) -> Response {
+pub async fn revoke_manifest_key(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let token_prefix = audit::token_prefix_from_headers(&headers);
+    let ip = audit::client_ip_from_headers(&headers);
+
     let removed = crate::db::delete_server_secret(&state.db, "manifest_signing_key");
 
     // 热生效：把配置中的 signing key 置空
     let mut new_cfg = state.config.load_full().as_ref().clone();
     new_cfg.manifest_signing_key = None;
     state.config.store(std::sync::Arc::new(new_cfg));
+
+    audit::spawn_record(
+        &state,
+        token_prefix,
+        audit::ACTION_MANIFEST_REVOKE,
+        None,
+        ip,
+        removed,
+        Some(format!(r#"{{"removed":{removed}}}"#)),
+    );
 
     if removed {
         tracing::info!("管理面板撤销 manifest 签名密钥");
@@ -385,4 +576,39 @@ pub async fn revoke_manifest_key(State(state): State<AppState>) -> Response {
         // 没有密钥可撤销，也算幂等成功
         Json(serde_json::json!({"ok": true, "removed": false})).into_response()
     }
+}
+
+// ──────── GET /admin/api/audit（v1.5.0） ────────
+
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    pub action: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct AuditListResponse {
+    pub total: i64,
+    pub entries: Vec<audit::AuditEntry>,
+}
+
+pub async fn audit_list(
+    State(state): State<AppState>,
+    Query(q): Query<AuditQuery>,
+) -> Json<AuditListResponse> {
+    let limit = q.limit.unwrap_or(100).min(500);
+    let offset = q.offset.unwrap_or(0);
+    let action_filter = q.action.clone();
+    let db = state.db.clone();
+
+    let (total, entries) = tokio::task::spawn_blocking(move || {
+        let total = audit::count(&db, action_filter.as_deref());
+        let entries = audit::load_recent(&db, limit, offset, action_filter.as_deref());
+        (total, entries)
+    })
+    .await
+    .unwrap_or_else(|_| (0, Vec::new()));
+
+    Json(AuditListResponse { total, entries })
 }

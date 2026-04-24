@@ -4,6 +4,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode};
@@ -92,4 +93,107 @@ pub async fn rate_limit_middleware(
     }
 
     next.run(request).await
+}
+
+// ──────────────── v1.5.0 admin 登录限流 + 失败 ban ────────────────
+
+/// admin 失败 ban 阈值：窗口内累计失败次数达到此值触发 ban。
+pub const ADMIN_FAIL_BAN_THRESHOLD: u32 = 30;
+/// admin 失败计数窗口：超过此窗口的累计自动重置。
+pub const ADMIN_FAIL_WINDOW_MS: u64 = 60 * 60 * 1000; // 1 小时
+/// admin ban 持续时长。
+pub const ADMIN_BAN_DURATION_MS: u64 = 15 * 60 * 1000; // 15 分钟
+
+#[derive(Debug, Default, Clone)]
+struct FailState {
+    count: u32,
+    first_fail_ms: u64,
+    ban_until_ms: u64,
+}
+
+/// admin 登录限流器：按 IP 追踪失败次数，连续失败触发临时 ban。
+#[derive(Default)]
+pub struct AdminLoginLimiter {
+    states: DashMap<String, FailState>,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+impl AdminLoginLimiter {
+    /// 检查 IP 是否处于 ban 中。
+    pub fn is_banned(&self, ip: &str) -> bool {
+        let now = now_ms();
+        if let Some(entry) = self.states.get(ip) {
+            return entry.ban_until_ms > now;
+        }
+        false
+    }
+
+    /// 记录一次登录失败，返回 `(是否触发新 ban, 当前失败累计)`。
+    /// 自动执行窗口过期重置。
+    pub fn record_fail(&self, ip: &str) -> (bool, u32) {
+        let now = now_ms();
+        let mut entry = self.states.entry(ip.to_string()).or_default();
+
+        // 窗口过期：重置计数
+        if now.saturating_sub(entry.first_fail_ms) > ADMIN_FAIL_WINDOW_MS {
+            entry.count = 0;
+            entry.first_fail_ms = now;
+            entry.ban_until_ms = 0;
+        }
+
+        if entry.count == 0 {
+            entry.first_fail_ms = now;
+        }
+        entry.count = entry.count.saturating_add(1);
+
+        let triggered = if entry.count >= ADMIN_FAIL_BAN_THRESHOLD && entry.ban_until_ms <= now {
+            entry.ban_until_ms = now + ADMIN_BAN_DURATION_MS;
+            true
+        } else {
+            false
+        };
+
+        (triggered, entry.count)
+    }
+
+    /// 登录成功时清空失败计数（但保留已生效的 ban — 直到自然到期）。
+    pub fn record_success(&self, ip: &str) {
+        if let Some(mut entry) = self.states.get_mut(ip) {
+            entry.count = 0;
+            entry.first_fail_ms = 0;
+        }
+    }
+
+    /// 管理接口用：返回当前所有 ban 中 IP 的列表。
+    pub fn banned_ips(&self) -> Vec<(String, u64)> {
+        let now = now_ms();
+        self.states
+            .iter()
+            .filter(|e| e.ban_until_ms > now)
+            .map(|e| (e.key().clone(), e.ban_until_ms))
+            .collect()
+    }
+
+    /// 定期清理过期且无 ban 的条目，防止 DashMap 无限增长。
+    pub fn cleanup(&self) {
+        let now = now_ms();
+        self.states.retain(|_, st| {
+            st.ban_until_ms > now
+                || now.saturating_sub(st.first_fail_ms) <= ADMIN_FAIL_WINDOW_MS
+        });
+    }
+}
+
+// ──────────────── v1.5.0 admin 通用 5/min 限流 ────────────────
+
+/// admin /admin/api/* 的 5/min 速率限流。
+/// 与业务 IpRateLimiter 独立，阈值更严格。
+pub fn admin_rate_limiter() -> IpRateLimiter {
+    IpRateLimiter::new(1, 5)
 }

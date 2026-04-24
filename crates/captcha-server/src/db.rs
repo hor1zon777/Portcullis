@@ -55,6 +55,7 @@ pub fn migrate(db: &Db) {
             argon2_p_cost INTEGER NOT NULL DEFAULT 1,
             bind_token_to_ip INTEGER NOT NULL DEFAULT 0,
             bind_token_to_ua INTEGER NOT NULL DEFAULT 0,
+            secret_key_hashed INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
@@ -91,6 +92,19 @@ pub fn migrate(db: &Db) {
             value      BLOB NOT NULL,
             created_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS admin_audit (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts           INTEGER NOT NULL,
+            token_prefix TEXT,
+            action       TEXT    NOT NULL,
+            target       TEXT,
+            ip           TEXT,
+            success      INTEGER NOT NULL,
+            meta_json    TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_ts ON admin_audit(ts);
+        CREATE INDEX IF NOT EXISTS idx_audit_action ON admin_audit(action);
         ",
     )
     .expect("数据库迁移失败");
@@ -113,6 +127,60 @@ pub fn migrate(db: &Db) {
         let sql = format!("ALTER TABLE sites ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0");
         let _ = conn.execute(&sql, []);
     }
+
+    // v1.5.0 增量迁移：为已有 sites 表添加 secret_key_hashed 标志列。
+    // 真正的 secret_key 明文 → HMAC 转换在 `migrate_site_secret_keys` 里完成，
+    // 该函数需要 master_secret，因此在 `AppState::new` 里单独调用。
+    let _ = conn.execute(
+        "ALTER TABLE sites ADD COLUMN secret_key_hashed INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+}
+
+/// v1.5.0：把 `sites` 表中 `secret_key_hashed = 0` 的行的 `secret_key` 做
+/// `HMAC-SHA256(master, plain)` 并 base64 化，然后置 `secret_key_hashed = 1`。
+/// 幂等：已 hashed 的行跳过。
+pub fn migrate_site_secret_keys(db: &Db, master: &[u8]) {
+    let conn = lock(db);
+
+    // 收集需要迁移的行
+    let rows: Vec<(String, String)> = {
+        let mut stmt = match conn
+            .prepare("SELECT key, secret_key FROM sites WHERE secret_key_hashed = 0")
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("secret_key 迁移查询失败: {e}");
+                return;
+            }
+        };
+        let iter = match stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }) {
+            Ok(i) => i,
+            Err(e) => {
+                tracing::warn!("secret_key 迁移查询失败: {e}");
+                return;
+            }
+        };
+        iter.filter_map(Result::ok).collect()
+    };
+
+    let count = rows.len();
+    for (key, plain) in rows {
+        let hashed = crate::site_secret::hash(&plain, master);
+        let _ = conn.execute(
+            "UPDATE sites SET secret_key = ?1, secret_key_hashed = 1, updated_at = ?2 WHERE key = ?3",
+            params![hashed, now_ms(), key],
+        );
+    }
+
+    if count > 0 {
+        tracing::info!(
+            migrated = count,
+            "v1.5.0: 已将 {count} 个站点的 secret_key 迁移到 HMAC 存储"
+        );
+    }
 }
 
 // ──────── 种子数据 ────────
@@ -121,7 +189,7 @@ pub fn seed_sites(db: &Db, sites: &HashMap<String, SiteConfig>) {
     let conn = lock(db);
     let now = now_ms();
     let mut stmt = conn
-        .prepare("INSERT OR IGNORE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, bind_token_to_ip, bind_token_to_ua, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)")
+        .prepare("INSERT OR IGNORE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, bind_token_to_ip, bind_token_to_ua, secret_key_hashed, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)")
         .unwrap();
     for (key, site) in sites {
         let origins_json = serde_json::to_string(&site.origins).unwrap_or_else(|_| "[]".into());
@@ -135,6 +203,7 @@ pub fn seed_sites(db: &Db, sites: &HashMap<String, SiteConfig>) {
             site.argon2_p_cost,
             site.bind_token_to_ip as i32,
             site.bind_token_to_ua as i32,
+            site.secret_key_hashed as i32,
             now,
             now
         ])
@@ -172,7 +241,7 @@ pub fn seed_ip_lists(db: &Db, blocked: &[String], allowed: &[String]) {
 pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
     let conn = lock(db);
     let mut stmt = conn
-        .prepare("SELECT key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, bind_token_to_ip, bind_token_to_ua FROM sites")
+        .prepare("SELECT key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, bind_token_to_ip, bind_token_to_ua, secret_key_hashed FROM sites")
         .unwrap();
     let rows = stmt
         .query_map([], |row| {
@@ -186,6 +255,7 @@ pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
             let argon2_p_cost: u32 = row.get(6)?;
             let bind_token_to_ip: i32 = row.get(7)?;
             let bind_token_to_ua: i32 = row.get(8)?;
+            let secret_key_hashed: i32 = row.get(9)?;
             Ok((
                 key,
                 SiteConfig {
@@ -197,6 +267,7 @@ pub fn load_sites(db: &Db) -> HashMap<String, SiteConfig> {
                     argon2_p_cost,
                     bind_token_to_ip: bind_token_to_ip != 0,
                     bind_token_to_ua: bind_token_to_ua != 0,
+                    secret_key_hashed: secret_key_hashed != 0,
                 },
             ))
         })
@@ -222,7 +293,7 @@ pub fn insert_site(db: &Db, key: &str, site: &SiteConfig) {
     let now = now_ms();
     let origins_json = serde_json::to_string(&site.origins).unwrap_or_else(|_| "[]".into());
     conn.execute(
-        "INSERT OR REPLACE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, bind_token_to_ip, bind_token_to_ua, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT OR REPLACE INTO sites (key, secret_key, diff, origins, argon2_m_cost, argon2_t_cost, argon2_p_cost, bind_token_to_ip, bind_token_to_ua, secret_key_hashed, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             key,
             site.secret_key,
@@ -233,6 +304,7 @@ pub fn insert_site(db: &Db, key: &str, site: &SiteConfig) {
             site.argon2_p_cost,
             site.bind_token_to_ip as i32,
             site.bind_token_to_ua as i32,
+            site.secret_key_hashed as i32,
             now,
             now
         ],
@@ -485,6 +557,106 @@ pub fn delete_server_secret(db: &Db, key: &str) -> bool {
         })
 }
 
+// ──────── 管理员审计（v1.5.0） ────────
+
+pub fn insert_audit(
+    db: &Db,
+    token_prefix: Option<&str>,
+    action: &str,
+    target: Option<&str>,
+    ip: Option<&str>,
+    success: bool,
+    meta_json: Option<&str>,
+) {
+    let conn = lock(db);
+    conn.execute(
+        "INSERT INTO admin_audit (ts, token_prefix, action, target, ip, success, meta_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![now_ms(), token_prefix, action, target, ip, success as i32, meta_json],
+    )
+    .unwrap_or_else(|e| { tracing::warn!("审计写入失败: {e}"); 0 });
+}
+
+pub fn load_recent_audit(
+    db: &Db,
+    limit: usize,
+    offset: usize,
+    action_filter: Option<&str>,
+) -> Vec<crate::admin::audit::AuditEntry> {
+    let conn = lock(db);
+
+    let (sql, use_filter) = match action_filter {
+        Some(_) => (
+            "SELECT id, ts, token_prefix, action, target, ip, success, meta_json \
+             FROM admin_audit WHERE action = ?1 ORDER BY id DESC LIMIT ?2 OFFSET ?3",
+            true,
+        ),
+        None => (
+            "SELECT id, ts, token_prefix, action, target, ip, success, meta_json \
+             FROM admin_audit ORDER BY id DESC LIMIT ?1 OFFSET ?2",
+            false,
+        ),
+    };
+
+    let mut stmt = match conn.prepare(sql) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("审计查询失败: {e}");
+            return Vec::new();
+        }
+    };
+
+    let map_row = |row: &rusqlite::Row| -> rusqlite::Result<crate::admin::audit::AuditEntry> {
+        Ok(crate::admin::audit::AuditEntry {
+            id: row.get::<_, i64>(0)?,
+            ts: row.get::<_, i64>(1)? as u64,
+            token_prefix: row.get(2)?,
+            action: row.get(3)?,
+            target: row.get(4)?,
+            ip: row.get(5)?,
+            success: row.get::<_, i32>(6)? != 0,
+            meta_json: row.get(7)?,
+        })
+    };
+
+    let rows = if use_filter {
+        stmt.query_map(
+            params![action_filter.unwrap(), limit as i64, offset as i64],
+            map_row,
+        )
+    } else {
+        stmt.query_map(params![limit as i64, offset as i64], map_row)
+    };
+
+    rows.map(|r| r.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+pub fn count_audit(db: &Db, action_filter: Option<&str>) -> i64 {
+    let conn = lock(db);
+    match action_filter {
+        Some(a) => conn
+            .query_row(
+                "SELECT COUNT(*) FROM admin_audit WHERE action = ?1",
+                params![a],
+                |row| row.get(0),
+            )
+            .unwrap_or(0),
+        None => conn
+            .query_row("SELECT COUNT(*) FROM admin_audit", [], |row| row.get(0))
+            .unwrap_or(0),
+    }
+}
+
+pub fn cleanup_old_audit(db: &Db, retention_days: u64) {
+    let cutoff = now_ms() - (retention_days as i64 * 86_400_000);
+    let conn = lock(db);
+    conn.execute("DELETE FROM admin_audit WHERE ts < ?1", params![cutoff])
+        .unwrap_or_else(|e| {
+            tracing::warn!("审计清理失败: {e}");
+            0
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,6 +678,7 @@ mod tests {
                 argon2_p_cost: 1,
                 bind_token_to_ip: false,
                 bind_token_to_ua: false,
+                secret_key_hashed: false,
             },
         );
         seed_sites(&db, &sites);
@@ -531,6 +704,7 @@ mod tests {
             argon2_p_cost: 1,
             bind_token_to_ip: false,
             bind_token_to_ua: false,
+            secret_key_hashed: false,
         };
         insert_site(&db, "pk_new", &site);
 

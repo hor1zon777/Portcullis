@@ -1,6 +1,6 @@
 [package]
 name = "captcha-server"
-version = "1.4.0"
+version = "1.5.0"
 edition = "2021"
 
 [dependencies]
@@ -28,6 +28,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 dotenvy = "0.15"
 arc-swap = "1"
 ipnet = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"

@@ -108,14 +108,17 @@ pub fn generate(
 }
 
 /// 校验 captcha_token 签名 + 过期，返回完整 payload。
-pub fn verify_full(token: &str, secret: &[u8]) -> Option<VerifiedToken> {
+///
+/// `secrets` 支持多把密钥（用于 v1.5.0 双 key 轮换场景）：
+/// 任一把匹配即签名通过。典型场景下传入 `&cfg.verify_secrets()`。
+pub fn verify_full(token: &str, secrets: &[&[u8]]) -> Option<VerifiedToken> {
     let (payload_b64, sig_b64) = token.split_once('.')?;
 
     let payload_bytes = B64.decode(payload_b64).ok()?;
     let sig_bytes = B64.decode(sig_b64).ok()?;
     let sig_arr: [u8; 32] = sig_bytes.as_slice().try_into().ok()?;
 
-    if !crypto::verify_sig(&payload_bytes, &sig_arr, secret) {
+    if !crypto::verify_sig_any(&payload_bytes, &sig_arr, secrets) {
         return None;
     }
 
@@ -172,7 +175,7 @@ mod tests {
     fn token_roundtrip_without_binding() {
         let secret = b"test-secret-key-long-enough-32-bytes!";
         let (token, _exp) = generate("cid-1", "pk_test", 300, secret, None, None);
-        let result = verify_full(&token, secret).unwrap();
+        let result = verify_full(&token, &[secret]).unwrap();
         assert_eq!(result.challenge_id, "cid-1");
         assert_eq!(result.site_key, "pk_test");
         assert!(result.ip_hash.is_none());
@@ -185,7 +188,7 @@ mod tests {
         let ip: IpAddr = "1.2.3.4".parse().unwrap();
         let ih = hash_ip(&ip);
         let (token, _) = generate("cid-1", "pk_test", 300, secret, Some(ih), None);
-        let result = verify_full(&token, secret).unwrap();
+        let result = verify_full(&token, &[secret]).unwrap();
         assert_eq!(result.ip_hash, Some(ih));
         assert!(result.ua_hash.is_none());
     }
@@ -195,14 +198,14 @@ mod tests {
         let secret = b"test-secret-key-long-enough-32-bytes!";
         let uh = hash_ua("Mozilla/5.0 (Test)");
         let (token, _) = generate("cid-1", "pk_test", 300, secret, None, Some(uh));
-        let result = verify_full(&token, secret).unwrap();
+        let result = verify_full(&token, &[secret]).unwrap();
         assert_eq!(result.ua_hash, Some(uh));
     }
 
     #[test]
     fn wrong_secret_rejects() {
         let (token, _) = generate("cid-1", "pk_test", 300, b"secret-a", None, None);
-        assert!(verify_full(&token, b"secret-b").is_none());
+        assert!(verify_full(&token, &[b"secret-b"]).is_none());
     }
 
     #[test]
@@ -211,7 +214,7 @@ mod tests {
         let (token, _) = generate("cid-1", "pk_test", 300, secret, None, None);
         let mut bad = token.clone();
         bad.push('X');
-        assert!(verify_full(&bad, secret).is_none());
+        assert!(verify_full(&bad, &[secret]).is_none());
     }
 
     #[test]
@@ -219,7 +222,7 @@ mod tests {
         let secret = b"test-secret-key-long-enough-32-b!";
         let (token, _) = generate("cid-1", "pk_test", 0, secret, None, None);
         std::thread::sleep(std::time::Duration::from_millis(10));
-        assert!(verify_full(&token, secret).is_none());
+        assert!(verify_full(&token, &[secret]).is_none());
     }
 
     #[test]
@@ -271,7 +274,7 @@ mod tests {
         let payload_json = serde_json::to_vec(&payload).unwrap();
         let sig = crypto::sign(&payload_json, secret);
         let token = format!("{}.{}", B64.encode(&payload_json), B64.encode(sig));
-        assert!(verify_full(&token, secret).is_none());
+        assert!(verify_full(&token, &[secret]).is_none());
     }
 
     #[test]
@@ -290,9 +293,23 @@ mod tests {
         let payload_json = serde_json::to_vec(&legacy_payload).unwrap();
         let sig = crypto::sign(&payload_json, secret);
         let token = format!("{}.{}", B64.encode(&payload_json), B64.encode(sig));
-        let result = verify_full(&token, secret).unwrap();
+        let result = verify_full(&token, &[secret]).unwrap();
         assert_eq!(result.challenge_id, "cid-legacy");
         assert!(result.ip_hash.is_none());
         assert!(result.ua_hash.is_none());
+    }
+
+    // v1.5.0 双 key 轮换
+    #[test]
+    fn verify_full_accepts_current_or_previous_secret() {
+        let current: &[u8] = b"current-secret-key-32-bytes!!!!!!";
+        let previous: &[u8] = b"previous-secret-key-32-bytes!!!!!";
+
+        // 用 previous 签发（模拟轮换前发出的 token）
+        let (old_token, _) = generate("cid-old", "pk_test", 300, previous, None, None);
+        // 轮换后服务端 verify_secrets = [current, previous]
+        assert!(verify_full(&old_token, &[current, previous]).is_some());
+        // 若仅剩 current（完成轮换窗口）则拒绝
+        assert!(verify_full(&old_token, &[current]).is_none());
     }
 }

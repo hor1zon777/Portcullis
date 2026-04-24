@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 use crate::admin::request_log::RequestLog;
 use crate::config::Config;
 use crate::db::Db;
+use crate::rate_limit::AdminLoginLimiter;
 use crate::risk::RiskTracker;
 use crate::store::memory::MemoryStore;
 
@@ -16,11 +17,15 @@ pub struct AppState {
     pub risk: Arc<RwLock<RiskTracker>>,
     pub request_log: Arc<RequestLog>,
     pub db: Db,
+    /// v1.5.0：admin 登录限流 + IP ban（仅对 /admin/api/* 生效，独立于业务限流器）
+    pub admin_limiter: Arc<AdminLoginLimiter>,
 }
 
 impl AppState {
     pub fn new(config: Config, db: Db) -> Self {
         crate::db::migrate(&db);
+        // v1.5.0：启动时把 DB 中遗留的明文 secret_key 全部 HMAC 化。幂等。
+        crate::db::migrate_site_secret_keys(&db, &config.secret);
         let risk_cfg = config.risk.clone();
         Self {
             config: Arc::new(ArcSwap::from_pointee(config)),
@@ -28,6 +33,7 @@ impl AppState {
             risk: Arc::new(RwLock::new(RiskTracker::new(risk_cfg))),
             request_log: Arc::new(RequestLog::new()),
             db,
+            admin_limiter: Arc::new(AdminLoginLimiter::default()),
         }
     }
 

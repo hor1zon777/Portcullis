@@ -1,5 +1,68 @@
 # Changelog
 
+## [1.5.0] — 2026-04-24 — 服务端密钥与审计硬化
+
+**目标**：把 DB 泄漏从「等于所有站点 secret_key 泄漏」降为「只泄漏不可逆 HMAC」，并为管理员操作提供完整可查的审计轨迹。同时引入 `CAPTCHA_SECRET` 双 key 轮换与登录失败自动 ban，补齐运维安全闭环。
+
+### 新增
+
+- **`CAPTCHA_SECRET` 双 key 轮换**：`Config` 新增 `secret_previous: Option<Vec<u8>>`（env `CAPTCHA_SECRET_PREVIOUS` / toml `[server].secret_previous`）。
+  - 签发（challenge sig / token HMAC / secret_key hash）永远用 `current`
+  - 验证时 `crypto::verify_sig_any` / `token::verify_full` / `site_secret::verify_any` 同时接受 `current` 与 `previous`
+  - 平滑轮换：先把旧 key 置为 `previous` 再发新 `current`，等 `token_ttl_secs` 窗口过去后再删除 `previous`
+  - 校验逻辑使用 `|=`（非短路）累积结果，避免通过时序侧信道判定"哪把 key 命中"
+- **admin 操作审计（`admin_audit` 表）**
+  - 新建 `admin/audit.rs` 模块 + `admin_audit` SQLite 表（`ts / token_prefix / action / target / ip / success / meta_json`）
+  - 记录：站点 CRUD（site.create/update/delete）、IP 封解（ip.block/unblock）、manifest 密钥（manifest.generate/revoke）、登录失败（login.fail）
+  - token 前缀脱敏：`sha256(admin_token)[..4]` hex（8 字符），支持同一 token 的多次操作聚合追踪，同时避免 DB 泄漏时可反推原 token
+  - 新 endpoint `GET /admin/api/audit?limit=&offset=&action=`，limit 默认 100、上限 500，可按 action 过滤
+  - 新增管理面板「审计」页（`/admin/audit`）：表格展示 + action 过滤下拉 + 分页 + 15 秒自动刷新
+- **admin 登录限流 + IP ban**（`rate_limit::AdminLoginLimiter`）
+  - 每 IP 追踪失败次数，**连续 30 次**失败后该 IP 在 **15 分钟**内被 ban（返回 429 + "登录失败次数过多..."）
+  - 成功登录清零失败计数（已生效的 ban 保留到自然到期）
+  - 失败窗口 1 小时，超过后自动重置
+- **admin 操作 webhook**（`admin/webhook.rs`）
+  - `CAPTCHA_ADMIN_WEBHOOK_URL` env / `[server].admin_webhook_url` toml
+  - 关键操作触发 fire-and-forget POST JSON（Slack Incoming Webhook 兼容），payload 含 `text / action / target / ip / success / meta / ts_ms`
+  - 2s 连接 + 3s 总超时，失败仅记日志
+  - 使用 `reqwest` + `rustls-tls` 支持 https（Slack 等）
+- **`site_secret` hash 化存储**（`site_secret.rs`）
+  - 原 `sites.secret_key` 明文 → `HMAC-SHA256(CAPTCHA_SECRET, plain)` base64（44 chars）
+  - siteverify 改用 `site_secret::verify_any`（支持 master 双 key 轮换）常数时间比较
+  - **启动迁移**：`migrate_site_secret_keys(&db, &master)` 对 `secret_key_hashed=0` 的行做一次性 HMAC 覆写（幂等）；`Config::load` 也对 env/toml 新传入的 SiteConfig 做同样处理，让内存里只保留 hash
+  - 创建站点时，`POST /admin/api/sites` 响应**一次性**返回明文；后续 `GET /admin/api/sites` 固定返回 `"(hashed)"`，提示管理员在创建时就保存明文
+- **集成测试 & 单元测试（新增 25+）**
+  - `crypto`：`verify_sig_any` 5 个用例（current 命中 / previous 命中 / 未知 key 拒绝 / 空切片拒绝 / 单 key 等价）
+  - `site_secret`：5 个用例（hash 长度 / 正反比对 / 错 master / 空值篡改）
+  - `token`：`verify_full_accepts_current_or_previous_secret` 轮换测试
+  - 集成 8 个：`siteverify_accepts_hashed_secret_key` / `dual_key_rotation_accepts_previous_signed_token` / `dual_key_rotation_rejects_unknown_secret` / `v1_5_site_secret_migration_db_level` / `audit_list_records_site_create` / `admin_login_fail_recorded_in_audit` / `admin_ban_after_many_failures_returns_429` / `create_site_returns_plaintext_secret_key_once`
+
+### 变更
+
+- **`token::verify_full(token, secrets: &[&[u8]])`** 签名扩展以支持多把密钥；调用方统一传入 `cfg.verify_secrets()` 切片。
+- **`site_secret::verify_any` / `crypto::verify_sig_any`** 引入多 key 验证接口，使用 `|=` 累积结果保持时序不变。
+- **DB schema 增量迁移** 新增 3 张表/列：`admin_audit` 表、`sites.secret_key_hashed` 列、`idx_audit_ts` / `idx_audit_action` 索引。全部幂等可回滚。
+- **SiteConfig 新增 `secret_key_hashed: bool`**（`#[serde(default)]` 默认 false，兼容 v1.4.x 反序列化）。
+- **admin auth middleware** 从 `from_fn + Extension` 重构为 `from_fn_with_state`，失败时写 audit + 触发限流；不存在 admin_token 时直接 401（兜底）。
+- **admin handler** 全量注入 `audit::spawn_record`，成功/失败两条路径都记录；仅登录成功不写（高频）。
+- **新增依赖**：`reqwest = "0.12"`（default-features 关，仅保留 `rustls-tls` + `json`），用于 webhook。
+- **所有 crate / SDK / admin-ui 版本号** 统一升级到 1.5.0；管理面板侧栏 `Portcullis vX.Y.Z` 同步刷新。
+
+### 破坏性
+
+- **`GET /admin/api/sites` 的 `secret_key` 字段语义变了**：v1.4.x 返回明文；v1.5.0 返回字面量 `"(hashed)"` 占位 + 新增 `secret_key_hashed: true`。**前端必须处理为"不可显示"**，管理员只能在创建时看到一次明文。（已在本版本一并更新 admin-ui。）
+- **`token::verify_full` / `db::update_site_fields` 签名变更**（lib 内部 API，下游若自行依赖需相应调整）。
+- **DB 启动迁移不可逆**：首次启动后 `sites.secret_key` 永久变为 HMAC，**要求管理员在升级前保留原文备份**（若需要继续给业务方使用）。UPGRADING.md §1 强调。
+- **`CAPTCHA_SECRET` 轮换步骤**：直接删除旧 `secret` 会让所有 stored_hash 失效 → 所有站点 siteverify 挂。正确流程见 UPGRADING.md v1.4 → v1.5 章节。
+
+### 建议的管理员操作
+
+- [ ] 升级前备份 `sites.secret_key` 原文（给业务方使用）
+- [ ] 配置 `CAPTCHA_ADMIN_WEBHOOK_URL` 接收关键操作通知
+- [ ] 定期查阅 `/admin/audit` 审计页，关注 `login.fail` 与 `manifest.revoke` 异常频次
+
+---
+
 ## [1.4.0] — 2026-04-24 — CaptchaToken 客户端身份绑定（opt-in）
 
 **目标**：阻断「一台机器批量解 PoW → 分发到多 IP / 多账号使用」的跨机器复用攻击。攻击者若批量算好 token 再下发给僵尸网络使用，绑定后的 token 在 `/siteverify` 阶段会因 IP/UA 不一致被直接拒绝。

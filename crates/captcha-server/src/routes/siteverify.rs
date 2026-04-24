@@ -7,9 +7,7 @@ use subtle::ConstantTimeEq;
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::token;
-
-#[derive(Debug, Deserialize)]
+use crate::token;#[derive(Debug, Deserialize)]
 pub struct SiteVerifyRequest {
     pub token: String,
     pub secret_key: String,
@@ -48,25 +46,32 @@ pub async fn site_verify(
     State(state): State<AppState>,
     Json(req): Json<SiteVerifyRequest>,
 ) -> Result<Json<SiteVerifyResponse>, AppError> {
-    // 1. 验证 token 签名 + 过期
+    // 1. 验证 token 签名 + 过期（双 key 轮换：current 与 previous 都接受）
     let cfg = state.config.load();
-    let verified = match token::verify_full(&req.token, &cfg.secret) {
+    let verified = match token::verify_full(&req.token, &cfg.verify_secrets()) {
         Some(v) => v,
         None => return Ok(fail("token 无效或已过期")),
     };
 
-    // 2. 常数时间比较 secret_key
+    // 2. 常数时间比较 secret_key（v1.5.0：优先走 HMAC 比较；兼容明文 fallback）
     let site = match cfg.get_site(&verified.site_key) {
         Some(s) => s,
         None => return Ok(fail("site_key 已下线")),
     };
-    let expected = site.secret_key.as_bytes();
-    let provided = req.secret_key.as_bytes();
-    let len_match = expected.len() == provided.len();
-    let content_match: bool = if len_match {
-        expected.ct_eq(provided).into()
+
+    let content_match: bool = if site.secret_key_hashed {
+        // stored 是 HMAC(master, plain) 的 base64，对 provided 做同样 HMAC 再比较
+        // 支持 CAPTCHA_SECRET 双 key 轮换：stored_hash 可能用老 master 算
+        crate::site_secret::verify_any(&req.secret_key, &site.secret_key, &cfg.verify_secrets())
     } else {
-        false
+        // 兼容：迁移尚未执行时走常数时间明文比较（理论上不应进入此分支）
+        let expected = site.secret_key.as_bytes();
+        let provided = req.secret_key.as_bytes();
+        if expected.len() == provided.len() {
+            expected.ct_eq(provided).into()
+        } else {
+            false
+        }
     };
     if !content_match {
         return Ok(fail("secret_key 不匹配"));
