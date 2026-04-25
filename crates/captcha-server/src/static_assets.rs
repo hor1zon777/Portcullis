@@ -321,10 +321,7 @@ pub async fn serve_demo() -> Response {
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=utf-8"),
         )
-        .header(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-cache"),
-        )
+        .header(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"))
         .header(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
             HeaderValue::from_static("*"),
