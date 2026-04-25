@@ -8,6 +8,9 @@ fn make_challenge(diff: u8) -> Challenge {
         diff,
         exp: u64::MAX,
         site_key: "pk_bench".to_string(),
+        m_cost: 4096,
+        t_cost: 1,
+        p_cost: 1,
     }
 }
 
