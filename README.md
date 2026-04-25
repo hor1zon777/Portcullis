@@ -31,10 +31,71 @@
 ./captcha-server --config captcha.toml
 
 # 方式 B：Docker Compose（3 服务：server + admin-ui + nginx）
+mkdir -p data          # 创建数据目录
 docker compose up -d
 # → http://localhost/admin/   管理面板
 # → http://localhost/api/...  公共 API
 ```
+
+<details>
+<summary>Docker 部署权限问题排查</summary>
+
+#### 症状：captcha-server 启动失败，日志报 `unable to open database file: /data/captcha.db`
+
+**原因**：容器内进程无权写入宿主机挂载的 `./data` 目录。
+
+**解决方法**（任选一种）：
+
+```bash
+# 方法 1：确保 data 目录存在且可写
+mkdir -p data
+chmod 777 data
+docker compose up -d
+
+# 方法 2：如果使用了 nonroot 用户（UID 65532），需匹配权限
+mkdir -p data
+chown -R 65532:65532 data
+chmod 700 data
+docker compose up -d
+```
+
+#### 症状：admin-ui 或 nginx 报 `Permission denied` 或 `read-only file system`
+
+**原因**：容器以非 root 用户运行，无法创建 nginx 缓存目录。
+
+**解决方法**：确保 `docker-compose.yml` 中 admin-ui 和 nginx 服务没有设置 `user` 和 `read_only` 限制，或使用默认配置：
+
+```yaml
+# docker-compose.yml（无权限限制的最简配置）
+services:
+  captcha-server:
+    image: ghcr.io/hor1zon777/portcullis/server:latest
+    env_file: .env
+    environment:
+      - CAPTCHA_DB_PATH=/data/captcha.db
+    volumes:
+      - ./data:/data
+    expose:
+      - "8787"
+    restart: unless-stopped
+
+  admin-ui:
+    image: ghcr.io/hor1zon777/portcullis/admin-ui:latest
+    expose:
+      - "80"
+    restart: unless-stopped
+
+  nginx:
+    image: ghcr.io/hor1zon777/portcullis/nginx:latest
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    depends_on:
+      - captcha-server
+      - admin-ui
+    restart: unless-stopped
+```
+
+</details>
 
 ### 2. 前端接入（零 JS 代码）
 
