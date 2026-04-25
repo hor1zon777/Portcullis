@@ -309,6 +309,7 @@ pub fn insert_site(db: &Db, key: &str, site: &SiteConfig) {
     .unwrap_or_else(|e| { tracing::warn!("DB 写入失败: {e}"); 0 });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update_site_fields(
     db: &Db,
     key: &str,
