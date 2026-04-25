@@ -46,6 +46,15 @@ pub fn build_router(
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app_state.clone());
 
+    // Demo 页面只在 debug build 中挂载，release 二进制不携带 demo.html。
+    #[cfg(debug_assertions)]
+    {
+        router = router
+            .route("/demo", get(static_assets::serve_demo))
+            .route("/demo.html", get(static_assets::serve_demo));
+        tracing::info!("Demo 页面已启用（debug build）: GET /demo");
+    }
+
     // Admin 面板（需要 admin_token 才注册）
     if let Some(token) = &config.admin_token {
         router = router.merge(admin::admin_router(app_state, token.clone()));

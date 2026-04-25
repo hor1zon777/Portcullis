@@ -300,6 +300,42 @@ fn looks_like_version(s: &str) -> bool {
             .unwrap_or(false)
 }
 
+// ───────────── Demo 页面（examples/demo.html 内联，仅 debug build） ─────────────
+//
+// 通过 `/demo`（或 `/demo.html`）直接吐 examples/demo.html，让本地演示
+// 与 API 同源访问，避免 file:// 协议下的 CORS 拦截。
+// 同源后浏览器对 /api/v1/challenge 等不再发预检请求。
+//
+// 注意：用 `#[cfg(debug_assertions)]` 包裹，
+// `cargo build --release` 时 demo.html 字节不会被嵌入，路由也不会注册，
+// 生产二进制完全不携带演示页面。
+
+#[cfg(debug_assertions)]
+const DEMO_HTML: &str = include_str!("../../../examples/demo.html");
+
+#[cfg(debug_assertions)]
+pub async fn serve_demo() -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        )
+        .header(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        )
+        .header(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static("*"),
+        )
+        .body(axum::body::Body::from(DEMO_HTML))
+        .unwrap_or_else(|e| {
+            tracing::error!("demo response 失败: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

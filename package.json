@@ -1,0 +1,15 @@
+{
+  "name": "pow-captcha-dev",
+  "private": true,
+  "version": "0.0.0",
+  "description": "本地开发编排：一条命令同时拉起 Rust 验证服务和 admin-ui Vite",
+  "scripts": {
+    "build:wasm": "wasm-pack build crates/captcha-wasm --target web --out-dir ../../sdk/pkg --release",
+    "predev": "pnpm build:wasm",
+    "dev": "concurrently -k -n srv,ui -c blue,magenta \"cargo run -p captcha-server -- --config captcha.dev.toml\" \"pnpm -C admin-ui dev\"",
+    "dev:setup": "pnpm install && pnpm -C admin-ui install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

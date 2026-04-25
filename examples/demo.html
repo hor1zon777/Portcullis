@@ -3,118 +3,658 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PoW CAPTCHA Demo</title>
+    <title>PoW CAPTCHA · Demo</title>
     <style>
       :root {
+        --bg: #f6f8fa;
+        --card: #ffffff;
+        --border: #d0d7de;
+        --border-soft: #e1e4e8;
+        --fg: #1f2328;
+        --fg-soft: #57606a;
+        --fg-mute: #8b949e;
+        --accent: #0969da;
+        --accent-hover: #0860ca;
+        --ok-bg: #dafbe1;
+        --ok-bd: #a4e7b5;
+        --ok-fg: #116329;
+        --err-bg: #ffebe9;
+        --err-bd: #ffc1bc;
+        --err-fg: #a40e26;
+        --info-bg: #ddf4ff;
+        --info-bd: #b6e3ff;
+        --info-fg: #0550ae;
+        --warn-bg: #fff7ed;
+        --warn-bd: #fdba74;
+        --warn-fg: #9a3412;
+        --code-bg: #f6f8fa;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
           'PingFang SC', 'Microsoft YaHei', sans-serif;
       }
       * { box-sizing: border-box; }
       body {
-        display: flex; justify-content: center; align-items: center;
-        min-height: 100vh; margin: 0; background: #f0f0f0;
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        line-height: 1.55;
+        padding: 24px 16px 64px;
+      }
+      .container {
+        max-width: 720px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      header.hero {
+        text-align: center;
+        padding: 8px 0 4px;
+      }
+      header.hero h1 {
+        margin: 0 0 6px;
+        font-size: 22px;
+        font-weight: 600;
+      }
+      header.hero p {
+        margin: 0;
+        font-size: 13px;
+        color: var(--fg-soft);
+      }
+      .badge {
+        display: inline-block;
+        padding: 1px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        background: var(--code-bg);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--fg-soft);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
       .card {
-        background: #fff; border-radius: 12px; padding: 32px 36px;
-        box-shadow: 0 4px 20px rgba(0,0,0,.08); width: 380px; max-width: 95vw;
+        background: var(--card);
+        border: 1px solid var(--border-soft);
+        border-radius: 12px;
+        padding: 18px 20px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
-      h2 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
-      .subtitle { font-size: 13px; color: #666; margin: 0 0 24px; }
-      label { display: block; font-size: 13px; margin-bottom: 6px; color: #555; }
-      input:not([type='hidden']) {
-        width: 100%; padding: 10px 12px; border: 1px solid #d0d7de;
-        border-radius: 6px; font-size: 14px; margin-bottom: 16px;
+      .card h2 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 12px;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--fg);
       }
-      input:focus { outline: none; border-color: #0969da; box-shadow: 0 0 0 3px rgba(9,105,218,.15); }
-      .captcha-row { display: flex; justify-content: center; margin: 16px 0; }
-      button[type='submit'] {
-        width: 100%; padding: 10px; font-size: 14px; font-weight: 600;
-        background: #0969da; color: #fff; border: none; border-radius: 6px; cursor: pointer;
+      .card h2 .step {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
       }
-      button:disabled { opacity: .5; cursor: not-allowed; }
-      button:not(:disabled):hover { background: #0860ca; }
-      #result {
-        margin-top: 16px; padding: 12px; border-radius: 6px;
-        font-size: 13px; display: none; word-break: break-all;
+      .card .desc {
+        margin: -4px 0 12px;
+        font-size: 12px;
+        color: var(--fg-mute);
       }
-      #result.ok { display: block; background: #dafbe1; border: 1px solid #a4e7b5; color: #116329; }
-      .code {
-        margin-top: 24px; padding: 14px; background: #f6f8fa;
-        border-radius: 8px; font-size: 12px; line-height: 1.6;
-        font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
-        color: #24292f; overflow-x: auto;
+      label {
+        display: block;
+        font-size: 12px;
+        font-weight: 500;
+        margin: 0 0 6px;
+        color: var(--fg-soft);
       }
-      .code .tag { color: #0550ae; }
-      .code .attr { color: #953800; }
-      .code .val { color: #0a3069; }
+      .field { margin-bottom: 12px; }
+      .field:last-child { margin-bottom: 0; }
+      input[type='text'], input[type='password'], input:not([type]) {
+        width: 100%;
+        padding: 8px 10px;
+        font-size: 13px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #fff;
+        transition: border-color 0.15s, box-shadow 0.15s;
+      }
+      input:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.15);
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      button {
+        padding: 7px 14px;
+        font-size: 13px;
+        font-weight: 500;
+        border: 1px solid var(--border);
+        background: #fff;
+        color: var(--fg);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      button:hover:not(:disabled) { background: var(--code-bg); }
+      button.primary {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+      button.primary:hover:not(:disabled) {
+        background: var(--accent-hover);
+        border-color: var(--accent-hover);
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .warn-tip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 6px;
+        font-size: 11px;
+        font-weight: 500;
+        background: var(--warn-bg);
+        border: 1px solid var(--warn-bd);
+        color: var(--warn-fg);
+        border-radius: 4px;
+        margin-left: 6px;
+      }
+      .alert {
+        padding: 10px 12px;
+        font-size: 12px;
+        border-radius: 6px;
+        margin-top: 12px;
+        word-break: break-all;
+        display: none;
+      }
+      .alert.show { display: block; }
+      .alert.info { background: var(--info-bg); border: 1px solid var(--info-bd); color: var(--info-fg); }
+      .alert.ok { background: var(--ok-bg); border: 1px solid var(--ok-bd); color: var(--ok-fg); }
+      .alert.err { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); }
+      .alert strong { display: block; margin-bottom: 2px; }
+      pre.code {
+        margin: 12px 0 0;
+        padding: 10px 12px;
+        background: var(--code-bg);
+        border: 1px solid var(--border-soft);
+        border-radius: 6px;
+        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 240px;
+        overflow: auto;
+        color: var(--fg);
+      }
+      pre.code:empty { display: none; }
+      .captcha-host {
+        display: flex;
+        justify-content: center;
+        padding: 6px 0;
+        min-height: 80px;
+      }
+      .log {
+        max-height: 200px;
+        overflow: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        line-height: 1.7;
+        color: var(--fg-soft);
+      }
+      .log .row { display: flex; gap: 8px; padding: 1px 0; border-bottom: 1px dashed transparent; }
+      .log .row:not(:last-child) { border-bottom-color: var(--border-soft); }
+      .log .ts { color: var(--fg-mute); flex-shrink: 0; }
+      .log .tag { flex-shrink: 0; min-width: 56px; }
+      .log .tag.info { color: var(--info-fg); }
+      .log .tag.ok { color: var(--ok-fg); }
+      .log .tag.err { color: var(--err-fg); }
+      .log .msg { flex: 1; word-break: break-all; }
+      .empty { color: var(--fg-mute); font-size: 12px; text-align: center; padding: 12px 0; }
+      .row-grid {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: end;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        background: var(--code-bg);
+        padding: 1px 5px;
+        border-radius: 3px;
+        border: 1px solid var(--border-soft);
+      }
     </style>
   </head>
   <body>
-    <div class="card">
-      <h2>PoW CAPTCHA</h2>
-      <p class="subtitle">
-        零 JS 代码接入演示 — 只需一个 &lt;script&gt; 和 data 属性
-      </p>
+    <main class="container">
+      <header class="hero">
+        <h1>PoW CAPTCHA Demo</h1>
+        <p>
+          浏览器端 Argon2 + HMAC PoW · 服务端 SDK
+          <span class="badge" id="server-version">v?.?.?</span>
+        </p>
+      </header>
 
-      <form id="form">
-        <label for="username">用户名</label>
-        <input id="username" name="username" required placeholder="alice" />
+      <!-- ① 配置 -->
+      <section class="card">
+        <h2><span class="step">1</span>SDK 配置</h2>
+        <p class="desc">配置自动写入 localStorage，URL query 也支持：<code>?endpoint=&amp;site_key=&amp;secret_key=</code></p>
 
-        <label for="password">密码</label>
-        <input id="password" name="password" type="password" required placeholder="••••••" />
-
-        <!-- PoW CAPTCHA：自动渲染 widget，通过后自动填充 #captcha_token -->
-        <div class="captcha-row">
-          <div data-pow-captcha
-               data-target="captcha_token"
-               data-callback="onCaptcha"></div>
+        <div class="field">
+          <label for="cfg-endpoint">endpoint（验证服务地址）</label>
+          <input id="cfg-endpoint" placeholder="http://127.0.0.1:8787" />
         </div>
 
-        <input type="hidden" id="captcha_token" name="captcha_token" />
-        <button type="submit" id="submit-btn" disabled>登录</button>
-      </form>
+        <div class="field">
+          <label for="cfg-sitekey">site_key（公开标识，可下发到浏览器）</label>
+          <input id="cfg-sitekey" placeholder="pk_xxxx" />
+        </div>
 
-      <div id="result"></div>
+        <div class="field">
+          <label for="cfg-secret">
+            secret_key（服务端密钥）
+            <span class="warn-tip">⚠ 演示用，生产严禁下发到浏览器</span>
+          </label>
+          <input id="cfg-secret" type="password" autocomplete="off" placeholder="留空则跳过 siteverify 演示" />
+        </div>
 
-      <!-- 接入代码预览 -->
-      <div class="code">
-        <span class="tag">&lt;script</span>
-        <span class="attr"> src</span>=<span class="val">"http://localhost:8787/sdk/pow-captcha.js"</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-        <span class="attr">data-site-key</span>=<span class="val">"pk_test"</span><span class="tag">&gt;&lt;/script&gt;</span><br><br>
-        <span class="tag">&lt;div</span>
-        <span class="attr"> data-pow-captcha</span>
-        <span class="attr"> data-target</span>=<span class="val">"captcha_token"</span><span class="tag">&gt;&lt;/div&gt;</span><br>
-        <span class="tag">&lt;input</span>
-        <span class="attr"> type</span>=<span class="val">"hidden"</span>
-        <span class="attr"> id</span>=<span class="val">"captcha_token"</span><span class="tag"> /&gt;</span>
-      </div>
-    </div>
+        <div class="actions">
+          <button id="btn-apply" class="primary">应用 / 重新加载 SDK</button>
+          <button id="btn-reset">恢复默认</button>
+          <button id="btn-toggle-secret" type="button">显示密钥</button>
+        </div>
 
-    <!--
-      ====== 接入方式 ======
-      服务端已内嵌 SDK + WASM，直接从 captcha server 加载即可。
-      修改下方 src 和 data-site-key 为你的实际值。
-    -->
-    <script src="http://localhost:8787/sdk/pow-captcha.js"
-            data-site-key="pk_test"></script>
+        <div class="alert info" id="config-alert"></div>
+      </section>
+
+      <!-- ② Widget -->
+      <section class="card">
+        <h2><span class="step">2</span>浏览器端完成 PoW</h2>
+        <p class="desc">点击下方控件，浏览器会用 WASM 跑 Argon2 + SHA-256 双阶段 PoW，求解出满足前导零比特数的 nonce。</p>
+
+        <div class="captcha-host">
+          <div
+            id="captcha-container"
+            data-pow-captcha
+            data-target="captcha_token"
+            data-callback="onCaptcha"
+          ></div>
+        </div>
+
+        <input type="hidden" id="captcha_token" />
+        <pre class="code" id="token-view"></pre>
+      </section>
+
+      <!-- ③ siteverify -->
+      <section class="card">
+        <h2><span class="step">3</span>服务端 siteverify（完整闭环）</h2>
+        <p class="desc">
+          模拟主站后端调用 <code>POST /api/v1/siteverify</code>，用 secret_key 校验上一步拿到的 captcha_token。
+          未填 secret_key 时此步骤被跳过。
+        </p>
+
+        <div class="actions">
+          <button id="btn-siteverify" class="primary" disabled>调用 siteverify</button>
+          <button id="btn-clear-result" disabled>清空结果</button>
+        </div>
+
+        <div class="alert" id="siteverify-alert"></div>
+        <pre class="code" id="siteverify-view"></pre>
+      </section>
+
+      <!-- 事件日志 -->
+      <section class="card">
+        <h2>事件日志</h2>
+        <div class="log" id="log">
+          <div class="empty">尚无事件，点击控件即可开始流程。</div>
+        </div>
+      </section>
+    </main>
 
     <script>
-      // 可选回调：验证通过后启用提交按钮
-      function onCaptcha(token) {
-        document.getElementById('submit-btn').disabled = false;
-        console.log('[demo] captcha_token:', token.slice(0, 60) + '...');
+      // ============================================================
+      // 配置存储
+      // ============================================================
+      const LS = {
+        endpoint: 'powc_demo_endpoint',
+        sitekey: 'powc_demo_sitekey',
+        secretkey: 'powc_demo_secretkey',
+      };
+      const DEFAULTS = Object.freeze({
+        endpoint: location.origin && location.origin.startsWith('http')
+          ? location.origin
+          : 'http://127.0.0.1:8787',
+        sitekey: '',
+        secretkey: '',
+      });
+
+      function readQuery() {
+        const q = new URLSearchParams(location.search);
+        return {
+          endpoint: q.get('endpoint') || q.get('url') || '',
+          sitekey: q.get('site_key') || q.get('sitekey') || '',
+          secretkey: q.get('secret_key') || q.get('secretkey') || '',
+        };
       }
 
-      // 表单提交（仅演示，实际应发送到业务后端）
-      document.getElementById('form').addEventListener('submit', function(e) {
-        e.preventDefault();
-        var token = document.getElementById('captcha_token').value;
-        if (!token) return alert('请先完成验证');
-        var r = document.getElementById('result');
-        r.className = 'ok';
-        r.innerHTML = '<strong>提交成功！</strong><br>captcha_token: ' + token.slice(0, 80) + '...';
-      });
+      function loadConfig() {
+        const qo = readQuery();
+        return {
+          endpoint: qo.endpoint || localStorage.getItem(LS.endpoint) || DEFAULTS.endpoint,
+          sitekey: qo.sitekey || localStorage.getItem(LS.sitekey) || DEFAULTS.sitekey,
+          secretkey: qo.secretkey || localStorage.getItem(LS.secretkey) || DEFAULTS.secretkey,
+        };
+      }
+
+      function saveConfig(cfg) {
+        localStorage.setItem(LS.endpoint, cfg.endpoint || '');
+        localStorage.setItem(LS.sitekey, cfg.sitekey || '');
+        localStorage.setItem(LS.secretkey, cfg.secretkey || '');
+      }
+
+      // ============================================================
+      // DOM 帮手
+      // ============================================================
+      const $ = (id) => document.getElementById(id);
+      const showAlert = (el, type, html) => {
+        el.className = 'alert ' + type + ' show';
+        el.innerHTML = html;
+      };
+      const hideAlert = (el) => {
+        el.className = 'alert';
+        el.innerHTML = '';
+      };
+      const setCode = (el, text) => {
+        el.textContent = text || '';
+      };
+
+      // ============================================================
+      // 事件日志
+      // ============================================================
+      const logEl = $('log');
+      let logHasContent = false;
+
+      function logEvent(tag, msg, type = 'info') {
+        if (!logHasContent) {
+          logEl.innerHTML = '';
+          logHasContent = true;
+        }
+        const ts = new Date();
+        const hh = String(ts.getHours()).padStart(2, '0');
+        const mm = String(ts.getMinutes()).padStart(2, '0');
+        const ss = String(ts.getSeconds()).padStart(2, '0');
+        const ms = String(ts.getMilliseconds()).padStart(3, '0');
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML =
+          `<span class="ts">${hh}:${mm}:${ss}.${ms}</span>` +
+          `<span class="tag ${type}">[${tag}]</span>` +
+          `<span class="msg"></span>`;
+        row.querySelector('.msg').textContent = msg;
+        logEl.appendChild(row);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      // ============================================================
+      // SDK 加载
+      // ============================================================
+      let currentScript = null;
+
+      function destroyWidget() {
+        const host = $('captcha-container');
+        const fresh = host.cloneNode(false);
+        fresh.removeAttribute('data-pow-mounted');
+        fresh.innerHTML = '';
+        host.parentNode.replaceChild(fresh, host);
+
+        $('captcha_token').value = '';
+        $('btn-siteverify').disabled = true;
+        $('btn-clear-result').disabled = true;
+        setCode($('token-view'), '');
+        setCode($('siteverify-view'), '');
+        hideAlert($('siteverify-alert'));
+
+        if (currentScript && currentScript.parentNode) {
+          currentScript.parentNode.removeChild(currentScript);
+        }
+        currentScript = null;
+        try {
+          delete window.PowCaptcha;
+        } catch (_) {
+          window.PowCaptcha = undefined;
+        }
+      }
+
+      function loadSdk(cfg) {
+        destroyWidget();
+
+        const ep = (cfg.endpoint || '').replace(/\/+$/, '');
+        if (!ep) {
+          showAlert($('config-alert'), 'err', '<strong>缺少 endpoint</strong>请填入服务端地址');
+          return;
+        }
+        if (!cfg.sitekey) {
+          showAlert(
+            $('config-alert'),
+            'err',
+            '<strong>缺少 site_key</strong>请到管理后台拷贝一个站点的 site_key'
+          );
+          return;
+        }
+
+        const src = ep + '/sdk/pow-captcha.js';
+        showAlert(
+          $('config-alert'),
+          'info',
+          `<strong>正在加载 SDK</strong>${src} · site_key=<code>${cfg.sitekey}</code>`
+        );
+        logEvent('sdk', '加载 ' + src);
+
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.dataset.siteKey = cfg.sitekey;
+        s.onload = () => {
+          showAlert(
+            $('config-alert'),
+            'ok',
+            `<strong>SDK 已加载</strong>endpoint=<code>${ep}</code> · site_key=<code>${cfg.sitekey}</code>`
+          );
+          logEvent('sdk', 'pow-captcha.js 加载成功', 'ok');
+        };
+        s.onerror = () => {
+          showAlert(
+            $('config-alert'),
+            'err',
+            '<strong>SDK 加载失败</strong>请确认服务端可访问，且允许跨域加载脚本'
+          );
+          logEvent('sdk', 'SDK 加载失败', 'err');
+        };
+        currentScript = s;
+        document.head.appendChild(s);
+      }
+
+      // ============================================================
+      // 服务端版本号 badge
+      // ============================================================
+      async function applyServerVersion(endpoint) {
+        try {
+          const url = endpoint.replace(/\/+$/, '') + '/sdk/manifest.json';
+          const res = await fetch(url, { credentials: 'omit', cache: 'no-cache' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const m = await res.json();
+          if (m && typeof m.version === 'string') {
+            $('server-version').textContent = 'v' + m.version;
+            logEvent('manifest', '服务端 SDK 版本 v' + m.version, 'ok');
+          }
+        } catch (e) {
+          $('server-version').textContent = '不可达';
+          logEvent('manifest', '版本拉取失败：' + (e && e.message ? e.message : e), 'err');
+        }
+      }
+
+      // ============================================================
+      // CAPTCHA 回调（widget 内部 onSuccess 触发）
+      // ============================================================
+      function onCaptcha(token) {
+        $('captcha_token').value = token;
+        setCode($('token-view'), token);
+        const sk = $('cfg-secret').value.trim();
+        $('btn-siteverify').disabled = !sk;
+        logEvent('pow', '完成 PoW，captcha_token 长度=' + token.length, 'ok');
+        if (!sk) {
+          showAlert(
+            $('siteverify-alert'),
+            'info',
+            '<strong>未填 secret_key</strong>跳过 siteverify。生产环境请在你的后端调用 /api/v1/siteverify。'
+          );
+        } else {
+          hideAlert($('siteverify-alert'));
+        }
+      }
+      window.onCaptcha = onCaptcha;
+
+      // ============================================================
+      // siteverify 调用
+      // ============================================================
+      async function callSiteverify() {
+        const token = $('captcha_token').value;
+        const cfg = loadConfig();
+        const secret = $('cfg-secret').value.trim();
+        if (!token) {
+          showAlert($('siteverify-alert'), 'err', '<strong>无 token</strong>请先完成第 2 步 PoW');
+          return;
+        }
+        if (!secret) {
+          showAlert($('siteverify-alert'), 'err', '<strong>未填 secret_key</strong>填入后再试');
+          return;
+        }
+
+        const ep = cfg.endpoint.replace(/\/+$/, '');
+        const url = ep + '/api/v1/siteverify';
+        const body = {
+          token,
+          secret_key: secret,
+          user_agent: navigator.userAgent,
+          // 浏览器拿不到真实公网 IP，启用 bind_token_to_ip 的站点应在生产后端补 client_ip
+        };
+
+        $('btn-siteverify').disabled = true;
+        showAlert($('siteverify-alert'), 'info', '<strong>调用中</strong>POST ' + url);
+        setCode($('siteverify-view'), '');
+        logEvent('siteverify', 'POST ' + url);
+
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const text = await res.text();
+          let parsed;
+          try {
+            parsed = JSON.parse(text);
+          } catch (_) {
+            parsed = { raw: text };
+          }
+          setCode($('siteverify-view'), JSON.stringify(parsed, null, 2));
+          $('btn-clear-result').disabled = false;
+
+          if (res.status === 200 && parsed.success === true) {
+            showAlert(
+              $('siteverify-alert'),
+              'ok',
+              `<strong>siteverify 成功</strong>site_key=<code>${parsed.site_key || '-'}</code> · challenge_id=<code>${parsed.challenge_id || '-'}</code>`
+            );
+            logEvent('siteverify', 'success site_key=' + (parsed.site_key || '-'), 'ok');
+          } else {
+            const errMsg = parsed && parsed.error ? parsed.error : 'HTTP ' + res.status;
+            showAlert(
+              $('siteverify-alert'),
+              'err',
+              `<strong>siteverify 失败 (HTTP ${res.status})</strong>${errMsg}`
+            );
+            logEvent('siteverify', 'failed: ' + errMsg, 'err');
+          }
+        } catch (e) {
+          const msg = e && e.message ? e.message : String(e);
+          showAlert($('siteverify-alert'), 'err', '<strong>请求异常</strong>' + msg);
+          logEvent('siteverify', 'exception: ' + msg, 'err');
+        } finally {
+          $('btn-siteverify').disabled = !$('captcha_token').value;
+        }
+      }
+
+      // ============================================================
+      // UI 绑定
+      // ============================================================
+      function init() {
+        const cfg = loadConfig();
+        $('cfg-endpoint').value = cfg.endpoint;
+        $('cfg-sitekey').value = cfg.sitekey;
+        $('cfg-secret').value = cfg.secretkey;
+
+        $('btn-apply').addEventListener('click', () => {
+          const next = {
+            endpoint: $('cfg-endpoint').value.trim() || DEFAULTS.endpoint,
+            sitekey: $('cfg-sitekey').value.trim(),
+            secretkey: $('cfg-secret').value.trim(),
+          };
+          saveConfig(next);
+          applyServerVersion(next.endpoint);
+          loadSdk(next);
+        });
+
+        $('btn-reset').addEventListener('click', () => {
+          Object.values(LS).forEach((k) => localStorage.removeItem(k));
+          $('cfg-endpoint').value = DEFAULTS.endpoint;
+          $('cfg-sitekey').value = DEFAULTS.sitekey;
+          $('cfg-secret').value = DEFAULTS.secretkey;
+          saveConfig(DEFAULTS);
+          destroyWidget();
+          hideAlert($('config-alert'));
+          logEvent('config', '已恢复默认值');
+        });
+
+        $('btn-toggle-secret').addEventListener('click', () => {
+          const i = $('cfg-secret');
+          const isPwd = i.type === 'password';
+          i.type = isPwd ? 'text' : 'password';
+          $('btn-toggle-secret').textContent = isPwd ? '隐藏密钥' : '显示密钥';
+        });
+
+        $('btn-siteverify').addEventListener('click', callSiteverify);
+        $('btn-clear-result').addEventListener('click', () => {
+          setCode($('siteverify-view'), '');
+          hideAlert($('siteverify-alert'));
+          $('btn-clear-result').disabled = true;
+        });
+
+        // 启动：拉版本号 + 初次加载 SDK（如果配置完整）
+        applyServerVersion(cfg.endpoint);
+        if (cfg.sitekey) {
+          loadSdk(cfg);
+        } else {
+          showAlert(
+            $('config-alert'),
+            'info',
+            '<strong>请先填写 site_key</strong>到管理后台 <code>/admin</code> 拷贝一个真实站点的 site_key 后点「应用」'
+          );
+          logEvent('config', '等待用户填入 site_key');
+        }
+      }
+
+      init();
     </script>
   </body>
 </html>

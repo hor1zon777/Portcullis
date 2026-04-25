@@ -264,21 +264,44 @@ Windows 用户：
 
 ## 开发模式
 
+**一条命令、一个端口**：根目录 `package.json` 用 `concurrently` 同时拉起 Rust 服务和 admin-ui Vite，浏览器只需访问 `http://localhost:5173`。
+
 ```bash
-# 终端 A：Rust 验证服务
-export CAPTCHA_SECRET="dev-secret-must-be-at-least-32-bytes!!"
-export CAPTCHA_ADMIN_TOKEN="dev-admin-token"
-export CAPTCHA_SITES='{"pk_test":{"secret_key":"sk_test_secret_at_least16","diff":18,"origins":["http://localhost:5173","http://localhost:5174"]}}'
-cargo run -p captcha-server
+# 首次：安装根 + admin-ui 依赖（仅一次）
+pnpm dev:setup
 
-# 终端 B：CAPTCHA SDK 开发服务器
-cd sdk && pnpm install && pnpm dev
-# → http://localhost:5173
-
-# 终端 C：管理面板开发服务器（HMR）
-cd admin-ui && pnpm install && pnpm dev
-# → http://localhost:5174/admin/
+# 启动（任意 OS / 任意终端）
+pnpm dev
 ```
+
+启动后：
+
+| 入口 | URL |
+|------|-----|
+| 管理后台 | <http://localhost:5173/admin/>（admin token 默认 `dev-admin-token`）|
+| 公共 API | <http://localhost:5173/api/v1/...> |
+| SDK 资源 | <http://localhost:5173/sdk/manifest.json> |
+| 健康检查 | <http://localhost:5173/healthz> |
+
+实际监听：
+
+- Rust 服务：`127.0.0.1:8787`（仅 loopback，配置来自 `captcha.dev.toml`）
+- Vite：`127.0.0.1:5173`，把 `/api`、`/admin/api`、`/sdk`、`/healthz`、`/metrics` 反代到 8787
+
+`Ctrl+C` 同时退出两个进程。如需 SDK 源码 HMR，另起 `pnpm -C sdk dev`。
+
+<details>
+<summary>手动分进程启动</summary>
+
+```bash
+# 终端 A：Rust
+cargo run -p captcha-server -- --config captcha.dev.toml
+
+# 终端 B：admin-ui
+pnpm -C admin-ui dev
+```
+
+</details>
 
 ## 测试
 

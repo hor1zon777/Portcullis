@@ -1,0 +1,26 @@
+# 本地开发配置（已提交）。内含的 secret / token 仅用于开发，请勿用于生产。
+# 使用方式：从仓库根执行 `pnpm dev`，会自动 `cargo run -- --config captcha.dev.toml`。
+
+[server]
+bind = "127.0.0.1:8787"
+secret = "this-is-a-local-dev-secret-key-32+"
+challenge_ttl_secs = 120
+token_ttl_secs = 300
+
+[admin]
+enabled = true
+token = "dev-admin-token"
+
+[[sites]]
+key = "pk_test"
+secret_key = "sk_test_secret_at_least16"
+diff = 18
+origins = ["http://localhost:5173"]
+
+[risk]
+dynamic_diff_enabled = true
+dynamic_diff_max_increase = 4
+window_size = 20
+fail_rate_threshold = 0.7
+blocked_ips = []
+allowed_ips = ["127.0.0.1"]
