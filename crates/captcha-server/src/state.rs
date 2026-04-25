@@ -24,8 +24,10 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config, db: Db) -> Self {
         crate::db::migrate(&db);
-        // v1.5.0：启动时把 DB 中遗留的明文 secret_key 全部 HMAC 化。幂等。
-        crate::db::migrate_site_secret_keys(&db, &config.secret);
+        // 历史 v1.5.0 曾在此处对 sites.secret_key 做 HMAC 化以增强抗内存 dump 风险。
+        // 因要求 secret_key 在管理面板中可再次查看，此迁移已禁用：新建站点存明文，
+        // 仅遗留的已 hashed 行（secret_key_hashed=true）保持不可恢复——它们仍可
+        // 通过 siteverify 验证（routes/siteverify.rs 同时支持明文与 HMAC 两种比较）。
         let risk_cfg = config.risk.clone();
         Self {
             config: Arc::new(ArcSwap::from_pointee(config)),

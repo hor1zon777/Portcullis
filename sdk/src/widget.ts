@@ -9,6 +9,25 @@ type State = 'idle' | 'running' | 'success' | 'error' | 'unsupported';
 const CHUNK_SIZE = 5000;
 const SOLVE_TIMEOUT_MS = 60_000;
 
+/** 缓存每个 endpoint 对应的 /sdk/manifest.json 的 version 字段，避免多个 widget 重复拉取 */
+const manifestVersionCache = new Map<string, Promise<string>>();
+
+function fetchManifestVersion(endpoint: string): Promise<string> {
+  const cached = manifestVersionCache.get(endpoint);
+  if (cached) return cached;
+  const url = `${endpoint.replace(/\/$/, '')}/sdk/manifest.json`;
+  const p = fetch(url, { credentials: 'omit', cache: 'no-cache' })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error('manifest fetch failed'))))
+    .then((m: { version?: string }) => (typeof m.version === 'string' ? m.version : ''))
+    .catch((e: unknown) => {
+      // 静默失败：版本号是装饰性元素，不应阻塞验证流程
+      console.debug('[Portcullis] manifest 版本拉取失败:', e);
+      return '';
+    });
+  manifestVersionCache.set(endpoint, p);
+  return p;
+}
+
 function expectedAttempts(diff: number): number {
   return Math.pow(2, diff);
 }
@@ -177,7 +196,9 @@ export class Widget implements CaptchaWidget {
     const brand = document.createElement('div');
     brand.className = 'powc-brand';
     brand.setAttribute('aria-hidden', 'true');
-    brand.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L3 7v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V7l-9-5z"/><path d="m9 12 2 2 4-4"/></svg><span class="powc-brand-text">Portcullis</span><span class="powc-brand-ver">v1.2.5</span>`;
+    // 版本号会在 mount 后异步从 /sdk/manifest.json 拉取并写入 [data-powc-ver]，
+    // 失败时保持空，不阻塞验证流程。
+    brand.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L3 7v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V7l-9-5z"/><path d="m9 12 2 2 4-4"/></svg><span class="powc-brand-text">Portcullis</span><span class="powc-brand-ver" data-powc-ver></span>`;
 
     labelWrap.appendChild(label);
     labelWrap.appendChild(progress);
@@ -198,6 +219,16 @@ export class Widget implements CaptchaWidget {
     this.label = label;
     this.progress = progress;
     this.bar = bar;
+
+    // 异步拉取版本号写入右下角，失败也不影响验证主流程
+    void this.applyBrandVersion();
+  }
+
+  private async applyBrandVersion(): Promise<void> {
+    const v = await fetchManifestVersion(this.opts.endpoint);
+    if (this.destroyed || !v) return;
+    const verEl = this.el.querySelector<HTMLElement>('[data-powc-ver]');
+    if (verEl) verEl.textContent = `v${v}`;
   }
 
   private setState(s: State, labelText?: string) {

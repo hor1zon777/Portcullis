@@ -42,8 +42,8 @@ pub async fn stats(State(state): State<AppState>) -> Json<StatsResponse> {
 #[derive(Serialize)]
 pub struct SiteView {
     key: String,
-    /// v1.5.0：`secret_key` 明文仅在创建时一次性返回，列表接口中固定为
-    /// `"(hashed)"` 占位字符串，前端据此提醒用户务必在创建时保存原文。
+    /// secret_key 的明文。对于历史上 v1.5.0 自动 hashed 的行（secret_key_hashed=true），
+    /// 列表会用 `"(hashed)"` 占位字符串提示无法再次查看；新建/明文站点会原样返回。
     secret_key: String,
     diff: u8,
     origins: Vec<String>,
@@ -63,9 +63,9 @@ pub async fn list_sites(State(state): State<AppState>) -> Json<Vec<SiteView>> {
         .map(|(k, v)| SiteView {
             key: k.clone(),
             secret_key: if v.secret_key_hashed {
+                // 历史 hashed 行无法恢复明文，前端会渲染「(已哈希存储)」提示
                 "(hashed)".to_string()
             } else {
-                // 理论上启动迁移后不会出现；仅兜底
                 v.secret_key.clone()
             },
             diff: v.diff,
@@ -121,9 +121,10 @@ pub async fn create_site(
 
     let site_key = gen_site_key();
     let secret_key_plain = gen_secret_key();
-    let secret_key_hash = crate::site_secret::hash(&secret_key_plain, &state.config.load().secret);
+    // 明文存储以便管理面板「再次查看」。siteverify 通过 secret_key_hashed=false 路径
+    // 走常数时间字节比较；历史 v1.5.0 hashed 行仍走 HMAC 比较路径不受影响。
     let new_site = crate::config::SiteConfig {
-        secret_key: secret_key_hash,
+        secret_key: secret_key_plain.clone(),
         diff: req.diff,
         origins: req.origins,
         argon2_m_cost: req
@@ -137,7 +138,7 @@ pub async fn create_site(
             .unwrap_or(captcha_core::challenge::DEFAULT_P_COST),
         bind_token_to_ip: req.bind_token_to_ip.unwrap_or(false),
         bind_token_to_ua: req.bind_token_to_ua.unwrap_or(false),
-        secret_key_hashed: true,
+        secret_key_hashed: false,
     };
     if let Err(e) = new_site.validate_argon2_params() {
         audit::spawn_record(

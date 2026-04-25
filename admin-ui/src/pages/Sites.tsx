@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useRef, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Pencil, Copy, Check, Eye, EyeOff, Info } from 'lucide-react';
 import { toast } from 'sonner';
@@ -13,7 +14,7 @@ function SecretCell({ value, hashed }: { value: string; hashed?: boolean }) {
     return (
       <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
         <span className="font-mono italic">(已哈希存储)</span>
-        <span title="v1.5.0 起服务端只保留 HMAC，明文仅在创建时一次性返回；请在创建时保存" className="cursor-help">ⓘ</span>
+        <span title="此站点是早期 v1.5.0 期间创建，secret_key 已 HMAC 化无法恢复明文；如需查看请删除后重建。新建站点会保留明文以便随时查看。" className="cursor-help">ⓘ</span>
       </span>
     );
   }
@@ -31,13 +32,45 @@ function SecretCell({ value, hashed }: { value: string; hashed?: boolean }) {
 }
 
 function Tooltip({ text }: { text: string }) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    setPos({ top: rect.top, left: rect.left + rect.width / 2 });
+  }, [open]);
+
   return (
-    <span className="relative group inline-flex ml-1">
-      <Info size={12} className="text-muted-foreground cursor-help" />
-      <span className="absolute z-50 hidden group-hover:block bottom-full left-1/2 -translate-x-1/2 mb-1 w-56 rounded bg-gray-900 text-white text-xs p-2 shadow-lg pointer-events-none whitespace-normal">
-        {text}
+    <>
+      <span
+        ref={triggerRef}
+        className="inline-flex ml-1 cursor-help align-middle"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        tabIndex={0}
+      >
+        <Info size={12} className="text-muted-foreground" />
       </span>
-    </span>
+      {open && pos && createPortal(
+        <span
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            top: pos.top - 6,
+            left: pos.left,
+            transform: 'translate(-50%, -100%)',
+          }}
+          className="z-[9999] w-56 rounded bg-gray-900 text-white text-xs p-2 shadow-lg pointer-events-none whitespace-normal"
+        >
+          {text}
+        </span>,
+        document.body
+      )}
+    </>
   );
 }
 
@@ -81,11 +114,11 @@ export default function Sites() {
       qc.invalidateQueries({ queryKey: ['sites'] });
       setShowForm(false);
       setForm({ diff: 18, origins: '', m_cost: 19456, t_cost: 2, bind_ip: false, bind_ua: false });
-      // v1.5.0：明文 secret_key 仅在创建响应里一次性返回，必须让用户立即保存
+      // 创建即复制一份到剪贴板方便立即接入；列表行也可随时点眼睛重新查看。
       copyToClipboard(data.secret_key);
       toast.success(
-        `站点 ${data.key} 已创建。Secret Key 已复制到剪贴板，请立即保存 —— 服务端不会再返回明文。`,
-        { duration: 15000 }
+        `站点 ${data.key} 已创建，Secret Key 已复制到剪贴板。`,
+        { duration: 8000 }
       );
     },
     onError: (e) => toast.error('创建失败: ' + (e as Error).message),

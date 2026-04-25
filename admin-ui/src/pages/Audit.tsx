@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ClipboardList } from 'lucide-react';
 import { api, type AuditList, type AuditEntry } from '@/lib/api';
+import { fmtTime } from '@/lib/utils';
 import { PageLoader } from '@/components/Spinner';
 
 const ACTION_OPTIONS: Array<{ value: string; label: string }> = [
@@ -29,11 +30,6 @@ function ActionBadge({ action, success }: { action: string; success: boolean }) 
       {action}
     </span>
   );
-}
-
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  return d.toLocaleString('zh-CN', { hour12: false });
 }
 
 export default function Audit() {
@@ -97,7 +93,7 @@ export default function Audit() {
               {entries.length > 0 ? entries.map((e) => (
                 <tr key={e.id}>
                   <td className="whitespace-nowrap text-xs font-mono text-muted-foreground">
-                    {formatTime(e.ts)}
+                    {fmtTime(e.ts)}
                   </td>
                   <td><ActionBadge action={e.action} success={e.success} /></td>
                   <td className="font-mono text-xs">{e.target ?? '-'}</td>

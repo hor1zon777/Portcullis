@@ -281,20 +281,10 @@ impl Config {
             );
         }
 
-        // v1.5.0：启动时把所有 `secret_key_hashed = false` 的 SiteConfig 转成 hash 存储。
-        // 对 TOML / env / CAPTCHA_SITES 输入统一执行这一步，让内存中的 SiteConfig
-        // 永远只保留 hash，降低进程内存 dump 泄漏风险。
-        let master_secret = secret.as_bytes();
-        let sites: HashMap<String, SiteConfig> = sites
-            .into_iter()
-            .map(|(k, mut sc)| {
-                if !sc.secret_key_hashed {
-                    sc.secret_key = crate::site_secret::hash(&sc.secret_key, master_secret);
-                    sc.secret_key_hashed = true;
-                }
-                (k, sc)
-            })
-            .collect();
+        // 历史 v1.5.0 曾在此处对 SiteConfig.secret_key 做 HMAC 化以减少内存 dump
+        // 暴露明文的风险。因管理面板需要支持「再次查看 Secret Key」，此处已不再
+        // 自动 hash —— 来自 TOML / env / DB 的明文将原样保留在内存里，secret_key_hashed
+        // 仅对老 v1.5.0 数据库里已经 hashed 的行为 true。
 
         let challenge_ttl_secs = std::env::var("CAPTCHA_CHALLENGE_TTL_SECS")
             .ok()

@@ -1708,10 +1708,10 @@ async fn create_site_returns_plaintext_secret_key_once() {
     assert!(!plain_secret.is_empty());
     assert_ne!(plain_secret, "(hashed)");
 
-    // list 接口返回 "(hashed)" 占位（明文不再可从管理面板取回）
+    // list 接口同样返回明文（用户要求 secret_key 在管理面板可再次查看）
     let (_, sites): (_, serde_json::Value) = get_json_auth(&app, "/admin/api/sites", token).await;
     let arr = sites.as_array().unwrap();
     let this = arr.iter().find(|s| s["key"] == site_key).unwrap();
-    assert_eq!(this["secret_key"], "(hashed)");
-    assert_eq!(this["secret_key_hashed"], true);
+    assert_eq!(this["secret_key"], plain_secret);
+    assert_eq!(this["secret_key_hashed"], false);
 }
