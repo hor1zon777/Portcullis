@@ -2050,11 +2050,11 @@ async fn admin_path_update_rejects_invalid_suffix() {
     );
 
     for bad in &[
-        "short",                 // 长 5
-        &"a".repeat(33),         // 长 33
-        "has space",             // 含空格
-        "slash/here",            // 含斜杠
-        "中文12345678",          // 中文
+        "short",         // 长 5
+        &"a".repeat(33), // 长 33
+        "has space",     // 含空格
+        "slash/here",    // 含斜杠
+        "中文12345678",  // 中文
     ] {
         let req = Request::builder()
             .method("PUT")
@@ -2155,12 +2155,8 @@ async fn admin_wrong_suffix_does_not_count_as_login_fail() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // login.fail audit 应当为 0（path_check 在 auth 之前，错误 suffix 直接 404 不进 auth）
-    let (status, audit_resp): (_, AuditListResp) = get_json_auth(
-        &app,
-        "/admin/testpath00/api/audit?action=login.fail",
-        token,
-    )
-    .await;
+    let (status, audit_resp): (_, AuditListResp) =
+        get_json_auth(&app, "/admin/testpath00/api/audit?action=login.fail", token).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         audit_resp.total, 0,
@@ -2178,4 +2174,3 @@ async fn admin_wrong_suffix_does_not_count_as_login_fail() {
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 }
-
