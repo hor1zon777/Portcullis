@@ -46,6 +46,11 @@ impl AppState {
         merged.manifest_signing_key =
             crate::db::load_server_secret_32(&self.db, "manifest_signing_key")
                 .or(merged.manifest_signing_key);
+        // admin path suffix 同样以 DB 为准：toml/env 都不持有此字段，
+        // rotate / 自定义都通过 DB 走，重载不能覆盖。
+        merged.admin_path_suffix =
+            crate::db::load_server_secret_string(&self.db, "admin_path_suffix")
+                .or(merged.admin_path_suffix);
 
         // 先拿到 risk 的 write 锁更新 CIDR / 滑动窗口阈值，再 publish 新 config。
         // 顺序说明：handler 路径是「先 load config，再 read risk」——若反过来先 store config

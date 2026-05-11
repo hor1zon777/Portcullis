@@ -76,6 +76,17 @@ async fn main() {
     cfg.manifest_signing_key =
         captcha_server::db::load_server_secret_32(&db, "manifest_signing_key");
 
+    // v1.6.0：admin path suffix —— 从 DB 加载；不存在或非法时重新生成并落盘。
+    // 首次启动 / 升级老库都会在这里 seed 一次，之后 admin 面板可 rotate / 自定义。
+    cfg.admin_path_suffix = Some(ensure_admin_path_suffix(&db));
+    if let Some(ref suffix) = cfg.admin_path_suffix {
+        tracing::info!(
+            admin_path_suffix = %suffix,
+            "管理后台路径：/admin/{}/api/...（仅此 URL 可访问，其它一律 404）",
+            suffix,
+        );
+    }
+
     let site_count = cfg.sites.len();
     tracing::info!("SQLite 已初始化：{}", cfg.db_path.display());
 
@@ -185,4 +196,27 @@ fn run_healthcheck(addr: &str) {
             std::process::exit(1);
         }
     }
+}
+
+/// 启动时确保 DB 中有合法的 admin path suffix；无则生成并落盘。
+/// 历史库（v1.5 及之前）没有这条记录，第一次启动到 v1.6 会在这里自动 seed。
+fn ensure_admin_path_suffix(db: &captcha_server::db::Db) -> String {
+    use captcha_server::config::{gen_admin_path_suffix, validate_admin_path_suffix};
+    const KEY: &str = "admin_path_suffix";
+    if let Some(s) = captcha_server::db::load_server_secret_string(db, KEY) {
+        if validate_admin_path_suffix(&s).is_ok() {
+            return s;
+        }
+        tracing::warn!(
+            existing = %s,
+            "DB 中的 admin_path_suffix 不合法（可能手工误改），重新生成"
+        );
+    }
+    let new_suffix = gen_admin_path_suffix().expect("生成 admin path suffix 失败");
+    captcha_server::db::save_server_secret_string(db, KEY, &new_suffix);
+    tracing::info!(
+        new_suffix = %new_suffix,
+        "首次启动：已生成新的 admin path suffix 并写入 DB"
+    );
+    new_suffix
 }

@@ -618,3 +618,148 @@ pub async fn audit_list(
 
     Json(AuditListResponse { total, entries })
 }
+
+// ──────── v1.6.0: admin path suffix ────────
+
+/// audit 记录里用的脱敏前缀：`sha256(suffix)[..4]` hex（8 字符），
+/// 用法和 token_prefix 一致：可聚合相同 suffix 的所有事件，但不可逆推明文。
+fn admin_path_prefix(suffix: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(suffix.as_bytes());
+    let h = hasher.finalize();
+    format!("{:02x}{:02x}{:02x}{:02x}", h[0], h[1], h[2], h[3])
+}
+
+#[derive(Serialize)]
+pub struct AdminPathResponse {
+    /// 当前生效的 admin path suffix（仅 admin 自己能拿到，因为已经过 path_check + auth）
+    pub suffix: String,
+    /// 允许的长度区间，供前端做客户端校验
+    pub min_len: usize,
+    pub max_len: usize,
+    /// 字符集说明（提示性）
+    pub charset: &'static str,
+}
+
+pub async fn admin_path_get(State(state): State<AppState>) -> Response {
+    let suffix = state
+        .config
+        .load()
+        .admin_path_suffix
+        .clone()
+        .unwrap_or_default();
+    Json(AdminPathResponse {
+        suffix,
+        min_len: crate::config::ADMIN_PATH_MIN_LEN,
+        max_len: crate::config::ADMIN_PATH_MAX_LEN,
+        charset: "[A-Za-z0-9_-]",
+    })
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct UpdateAdminPathRequest {
+    pub suffix: String,
+}
+
+/// 把新 suffix 落 DB 并更新 ArcSwap config。
+/// 写库失败时直接报 500，避免内存与 DB 不一致。
+fn apply_new_suffix(state: &AppState, new_suffix: &str) -> Response {
+    crate::db::save_server_secret_string(&state.db, "admin_path_suffix", new_suffix);
+
+    // 立刻替换 ArcSwap config，让下一个请求就要求新的 URL。
+    let mut new_cfg = state.config.load_full().as_ref().clone();
+    new_cfg.admin_path_suffix = Some(new_suffix.to_string());
+    state.config.store(std::sync::Arc::new(new_cfg));
+
+    Json(serde_json::json!({
+        "ok": true,
+        "suffix": new_suffix,
+        "note": "请使用新 URL /admin/<suffix>/api/* 访问；旧 URL 立即失效",
+    }))
+    .into_response()
+}
+
+pub async fn admin_path_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateAdminPathRequest>,
+) -> Response {
+    let token_prefix = audit::token_prefix_from_headers(&headers);
+    let ip = audit::client_ip_from_headers(&headers);
+
+    let new_suffix = req.suffix.trim().to_string();
+    if let Err(e) = crate::config::validate_admin_path_suffix(&new_suffix) {
+        audit::spawn_record(
+            &state,
+            token_prefix,
+            audit::ACTION_ADMIN_PATH_UPDATE,
+            None,
+            ip,
+            false,
+            Some(format!(
+                r#"{{"error":{}}}"#,
+                serde_json::to_string(&e).unwrap_or_default()
+            )),
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
+    }
+
+    let resp = apply_new_suffix(&state, &new_suffix);
+
+    audit::spawn_record(
+        &state,
+        token_prefix,
+        audit::ACTION_ADMIN_PATH_UPDATE,
+        Some(admin_path_prefix(&new_suffix)),
+        ip,
+        true,
+        None,
+    );
+    tracing::info!("管理员自定义 admin path suffix（已脱敏存档）");
+    resp
+}
+
+pub async fn admin_path_rotate(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let token_prefix = audit::token_prefix_from_headers(&headers);
+    let ip = audit::client_ip_from_headers(&headers);
+
+    let new_suffix = match crate::config::gen_admin_path_suffix() {
+        Ok(s) => s,
+        Err(e) => {
+            audit::spawn_record(
+                &state,
+                token_prefix,
+                audit::ACTION_ADMIN_PATH_ROTATE,
+                None,
+                ip,
+                false,
+                Some(r#"{"error":"rng_failed"}"#.to_string()),
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response();
+        }
+    };
+
+    let resp = apply_new_suffix(&state, &new_suffix);
+
+    audit::spawn_record(
+        &state,
+        token_prefix,
+        audit::ACTION_ADMIN_PATH_ROTATE,
+        Some(admin_path_prefix(&new_suffix)),
+        ip,
+        true,
+        None,
+    );
+    tracing::info!("管理员 rotate admin path suffix（已脱敏存档）");
+    resp
+}

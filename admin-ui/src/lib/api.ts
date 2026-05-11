@@ -1,4 +1,5 @@
 const TOKEN_KEY = 'captcha_admin_token';
+const ADMIN_PATH_KEY = 'captcha_admin_path';
 const TIMEOUT_MS = 10_000;
 
 export function getToken(): string | null {
@@ -13,7 +14,21 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-/** 401 时触发：让 App 监听并重置认证状态 */
+/** v1.6.0：admin 后台访问路径后缀。服务端 URL 为 /admin/<suffix>/api/...，
+ *  错误的 suffix 直接 404，前端必须先拿到这一段才能调任何 admin API。 */
+export function getAdminPath(): string | null {
+  return localStorage.getItem(ADMIN_PATH_KEY);
+}
+
+export function setAdminPath(suffix: string): void {
+  localStorage.setItem(ADMIN_PATH_KEY, suffix);
+}
+
+export function clearAdminPath(): void {
+  localStorage.removeItem(ADMIN_PATH_KEY);
+}
+
+/** 401/404 时触发：让 App 监听并重置认证状态 */
 const AUTH_EVENT = 'captcha-admin-auth-changed';
 export function onAuthChange(handler: () => void): () => void {
   window.addEventListener(AUTH_EVENT, handler);
@@ -34,13 +49,29 @@ export class ApiError extends Error {
   }
 }
 
+/** URL-safe + 8~32 字符的客户端校验，避免明显错误的 suffix 触发 404。
+ *  注意服务端会做权威校验，这里只是早期反馈。 */
+export function isValidAdminPath(s: string): boolean {
+  return /^[A-Za-z0-9_-]{8,32}$/.test(s);
+}
+
+/** 构造 /admin/<suffix>/api<path>；若本地没存 suffix 直接抛错让上层走登录页。 */
+function buildAdminUrl(path: string): string {
+  const suffix = getAdminPath();
+  if (!suffix) {
+    throw new ApiError(0, '未配置 Admin 访问路径，请重新登录');
+  }
+  return `/admin/${encodeURIComponent(suffix)}/api${path}`;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
   try {
-    const res = await fetch(`/admin/api${path}`, {
+    const url = buildAdminUrl(path);
+    const res = await fetch(url, {
       ...init,
       signal: ctrl.signal,
       headers: {
@@ -50,10 +81,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       },
     });
 
-    if (res.status === 401) {
+    // 401 = token 失效；404 = admin path suffix 不对（或已被 rotate）。
+    // 两种情况都让用户回登录页重输 token + path。
+    if (res.status === 401 || res.status === 404) {
+      const reason =
+        res.status === 401 ? 'Token 已失效' : 'Admin 访问路径不正确或已变更';
       clearToken();
+      clearAdminPath();
       emitAuthChange();
-      throw new ApiError(401, '未授权或 Token 已失效');
+      throw new ApiError(res.status, reason);
     }
 
     if (!res.ok) {
@@ -88,15 +124,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 }
 
-/** 用于 Login：直接探测一个低成本端点验证 token */
-export async function probeAuth(token: string): Promise<boolean> {
+/** 用于 Login：直接探测一个低成本端点验证 token + admin path 后缀 */
+export async function probeAuth(token: string, adminPath: string): Promise<boolean> {
+  if (!isValidAdminPath(adminPath)) return false;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch('/admin/api/stats', {
-      signal: ctrl.signal,
-      headers: { authorization: `Bearer ${token}` },
-    });
+    const res = await fetch(
+      `/admin/${encodeURIComponent(adminPath)}/api/stats`,
+      {
+        signal: ctrl.signal,
+        headers: { authorization: `Bearer ${token}` },
+      }
+    );
     return res.ok;
   } catch {
     return false;
@@ -193,6 +233,22 @@ export interface GenerateManifestKeyResult {
   first_time: boolean;
 }
 
+export interface AdminPathInfo {
+  /** 当前 admin path suffix */
+  suffix: string;
+  /** 允许的最小 / 最大长度 */
+  min_len: number;
+  max_len: number;
+  /** 字符集说明，仅做提示 */
+  charset: string;
+}
+
+export interface AdminPathUpdateResult {
+  ok: boolean;
+  suffix: string;
+  note?: string;
+}
+
 // ──────── API 调用 ────────
 
 export const api = {
@@ -233,4 +289,12 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request<AuditList>(`/audit${suffix}`);
   },
+  adminPathGet: () => request<AdminPathInfo>('/admin-path'),
+  adminPathUpdate: (suffix: string) =>
+    request<AdminPathUpdateResult>('/admin-path', {
+      method: 'PUT',
+      body: JSON.stringify({ suffix }),
+    }),
+  adminPathRotate: () =>
+    request<AdminPathUpdateResult>('/admin-path/rotate', { method: 'POST' }),
 };

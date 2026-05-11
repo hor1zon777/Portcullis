@@ -562,6 +562,39 @@ pub fn save_server_secret_32(db: &Db, key: &str, value: &[u8; 32]) {
     });
 }
 
+/// 读取一个变长 UTF-8 字符串秘密（用于 admin_path_suffix 等不定长字段）。
+pub fn load_server_secret_string(db: &Db, key: &str) -> Option<String> {
+    let conn = lock(db);
+    let value: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT value FROM server_secrets WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .ok();
+    let bytes = value?;
+    match String::from_utf8(bytes) {
+        Ok(s) => Some(s),
+        Err(_) => {
+            tracing::warn!(key, "server_secrets 存的不是合法 UTF-8，忽略");
+            None
+        }
+    }
+}
+
+/// 写入 / 覆盖一个变长 UTF-8 字符串秘密。
+pub fn save_server_secret_string(db: &Db, key: &str, value: &str) {
+    let conn = lock(db);
+    conn.execute(
+        "INSERT OR REPLACE INTO server_secrets (key, value, created_at) VALUES (?1, ?2, ?3)",
+        params![key, value.as_bytes(), now_ms()],
+    )
+    .unwrap_or_else(|e| {
+        tracing::warn!("DB 写入失败: {e}");
+        0
+    });
+}
+
 /// 删除秘密，返回是否真删除了一行。
 pub fn delete_server_secret(db: &Db, key: &str) -> bool {
     let conn = lock(db);

@@ -172,6 +172,10 @@ pub struct Config {
     pub manifest_signing_key: Option<[u8; 32]>,
     /// v1.5.0：admin 关键操作（站点 CRUD / IP 封解 / manifest key / 密钥轮换）的 webhook URL。
     pub admin_webhook_url: Option<String>,
+    /// v1.6.0：admin 路径随机后缀。所有 admin API 形如 `/admin/{suffix}/api/*`，
+    /// 错误的 suffix 一律返回 404，藏起整个管理端入口。
+    /// 启动时若 DB 为空会自动生成 16 字符随机串。可在 admin 后台 rotate / 自定义。
+    pub admin_path_suffix: Option<String>,
 }
 
 impl Config {
@@ -341,6 +345,9 @@ impl Config {
             config_path,
             manifest_signing_key,
             admin_webhook_url,
+            // 此处暂置 None：真正的 suffix 来自 DB（启动迁移）或后续 admin 面板 rotate。
+            // main.rs 会在 AppState::new 之前从 DB 加载并填入。
+            admin_path_suffix: None,
         }
     }
 
@@ -469,6 +476,49 @@ fn parse_signing_key(raw: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
+// ──────────────── v1.6.0：admin path suffix ────────────────
+
+/// admin path suffix 字符集与长度限制。
+/// URL-safe（无需编码）+ 至少 8 字符确保不可暴力枚举。
+pub const ADMIN_PATH_MIN_LEN: usize = 8;
+pub const ADMIN_PATH_MAX_LEN: usize = 32;
+const ADMIN_PATH_DEFAULT_LEN: usize = 16;
+const ADMIN_PATH_ALPHABET: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+
+/// 校验 admin path suffix 合法性：URL-safe 字符集 + 长度 8-32。
+/// 之所以不允许 `.`/`/`/`%` 等：避免与 axum 路径参数解析冲突或被 URL 规范化吞掉。
+pub fn validate_admin_path_suffix(s: &str) -> Result<(), String> {
+    if s.len() < ADMIN_PATH_MIN_LEN || s.len() > ADMIN_PATH_MAX_LEN {
+        return Err(format!(
+            "admin path suffix 长度必须在 [{}, {}] 内，当前 {}",
+            ADMIN_PATH_MIN_LEN,
+            ADMIN_PATH_MAX_LEN,
+            s.len()
+        ));
+    }
+    if !s
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err("admin path suffix 只允许字母、数字、下划线和连字符".into());
+    }
+    Ok(())
+}
+
+/// 生成默认长度（16 字符）的随机 admin path suffix。
+/// 失败时返回 Err（极少见）。调用方应在启动期直接 panic 而非降级到固定值。
+pub fn gen_admin_path_suffix() -> Result<String, String> {
+    let mut buf = [0u8; ADMIN_PATH_DEFAULT_LEN];
+    getrandom::getrandom(&mut buf).map_err(|e| format!("随机数生成失败: {e}"))?;
+    let n = ADMIN_PATH_ALPHABET.len() as u8;
+    let s: String = buf
+        .iter()
+        .map(|b| ADMIN_PATH_ALPHABET[(*b % n) as usize] as char)
+        .collect();
+    Ok(s)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,5 +550,41 @@ mod tests {
         let padded = format!("  {}  \n", B64.encode(seed));
         let parsed = parse_signing_key(&padded).unwrap();
         assert_eq!(parsed, seed);
+    }
+
+    #[test]
+    fn admin_path_suffix_validation() {
+        // 合法
+        assert!(validate_admin_path_suffix("Aa1_-bcde").is_ok()); // 长 9
+        assert!(validate_admin_path_suffix("abcdefgh").is_ok()); // 边界长 8
+        assert!(validate_admin_path_suffix(&"a".repeat(32)).is_ok()); // 边界长 32
+
+        // 长度越界
+        assert!(validate_admin_path_suffix("short").is_err()); // 长 5
+        assert!(validate_admin_path_suffix(&"a".repeat(33)).is_err()); // 长 33
+
+        // 非法字符
+        assert!(validate_admin_path_suffix("has space").is_err());
+        assert!(validate_admin_path_suffix("slash/here").is_err());
+        assert!(validate_admin_path_suffix("dot.here.").is_err());
+        assert!(validate_admin_path_suffix("中文12345678").is_err());
+    }
+
+    #[test]
+    fn admin_path_suffix_gen_is_valid() {
+        for _ in 0..20 {
+            let s = gen_admin_path_suffix().unwrap();
+            validate_admin_path_suffix(&s).unwrap_or_else(|e| panic!("生成结果非法: {s} ({e})"));
+        }
+    }
+
+    #[test]
+    fn admin_path_suffix_gen_is_random_enough() {
+        // 不要求加密学强度，但 20 次生成至少应有 ≥ 15 个不同值
+        let mut set = std::collections::HashSet::new();
+        for _ in 0..20 {
+            set.insert(gen_admin_path_suffix().unwrap());
+        }
+        assert!(set.len() >= 15, "随机性不足: {} 个不同值 / 20", set.len());
     }
 }

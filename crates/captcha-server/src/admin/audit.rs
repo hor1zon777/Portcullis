@@ -34,6 +34,10 @@ pub const ACTION_IP_UNBLOCK: &str = "ip.unblock";
 pub const ACTION_MANIFEST_GENERATE: &str = "manifest.generate";
 pub const ACTION_MANIFEST_REVOKE: &str = "manifest.revoke";
 pub const ACTION_LOGIN_FAIL: &str = "login.fail";
+/// v1.6.0：admin 路径后缀更新（自定义或 rotate）。target 始终为 hash 后的前缀，
+/// 避免在 audit 表里留下完整 admin URL。
+pub const ACTION_ADMIN_PATH_UPDATE: &str = "admin_path.update";
+pub const ACTION_ADMIN_PATH_ROTATE: &str = "admin_path.rotate";
 
 // ──────── 脱敏工具 ────────
 

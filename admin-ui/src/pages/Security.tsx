@@ -1,15 +1,235 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { KeyRound, Copy, Check, AlertCircle, Sparkles, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  KeyRound,
+  Copy,
+  Check,
+  AlertCircle,
+  Sparkles,
+  RefreshCw,
+  Trash2,
+  Link as LinkIcon,
+  Pencil,
+} from 'lucide-react';
 import { toast } from 'sonner';
-import { api, type ManifestPubkey } from '@/lib/api';
+import {
+  api,
+  setAdminPath,
+  isValidAdminPath,
+  type ManifestPubkey,
+  type AdminPathInfo,
+} from '@/lib/api';
 import { PageLoader } from '@/components/Spinner';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 type Confirm =
   | { kind: 'regenerate' }
   | { kind: 'revoke' }
+  | { kind: 'rotate-path' }
+  | { kind: 'update-path'; suffix: string }
   | null;
+
+function AdminPathCard() {
+  const qc = useQueryClient();
+  const { data, isLoading, error } = useQuery<AdminPathInfo>({
+    queryKey: ['admin-path'],
+    queryFn: api.adminPathGet,
+  });
+  const [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [confirm, setConfirm] = useState<Confirm>(null);
+
+  const rotateMut = useMutation({
+    mutationFn: api.adminPathRotate,
+    onSuccess: (res) => {
+      // 服务端已切到新 suffix，本地必须同步存储，否则下一次 API 调用会 404 → 自动登出
+      setAdminPath(res.suffix);
+      qc.invalidateQueries({ queryKey: ['admin-path'] });
+      toast.success(`Admin 路径已重置为 ${res.suffix}`);
+    },
+    onError: (e) => toast.error('重新生成失败：' + (e as Error).message),
+  });
+
+  const updateMut = useMutation({
+    mutationFn: (suffix: string) => api.adminPathUpdate(suffix),
+    onSuccess: (res) => {
+      setAdminPath(res.suffix);
+      qc.invalidateQueries({ queryKey: ['admin-path'] });
+      setEditing(false);
+      setDraft('');
+      toast.success(`Admin 路径已更新为 ${res.suffix}`);
+    },
+    onError: (e) => toast.error('更新失败：' + (e as Error).message),
+  });
+
+  async function handleCopy() {
+    if (!data?.suffix) return;
+    try {
+      await navigator.clipboard.writeText(data.suffix);
+      setCopied(true);
+      toast.success('已复制 Admin 路径');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error('复制失败，请手动选择');
+    }
+  }
+
+  function handleConfirm() {
+    if (!confirm) return;
+    const p =
+      confirm.kind === 'rotate-path'
+        ? rotateMut.mutateAsync()
+        : confirm.kind === 'update-path'
+          ? updateMut.mutateAsync(confirm.suffix)
+          : Promise.resolve();
+    p.finally(() => setConfirm(null));
+  }
+
+  if (isLoading) return <PageLoader />;
+  if (error) {
+    return (
+      <div className="card dark:bg-gray-900 text-red-500">
+        加载失败：{(error as Error).message}
+      </div>
+    );
+  }
+
+  const valid = isValidAdminPath(draft);
+  const fullUrl = data ? `/admin/${data.suffix}/api/...` : '';
+
+  return (
+    <div className="card dark:bg-gray-900 slide-up">
+      <div className="flex items-start gap-4">
+        <div className="p-3 bg-primary/10 rounded-xl">
+          <LinkIcon size={20} className="text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <div className="text-sm font-semibold">Admin 访问路径</div>
+            <span className="badge badge-success">已启用</span>
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-auto">
+              v1.6.0
+            </span>
+          </div>
+          <div className="text-xs text-muted-foreground mb-3 leading-relaxed">
+            所有 admin API 形如{' '}
+            <code className="text-[10px] px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono">
+              {fullUrl}
+            </code>
+            ，错误后缀一律 <strong>404</strong>，藏起整个管理端入口。
+            <strong>rotate / 自定义后旧 URL 立即失效</strong>，浏览器需要重新登录并输入新路径。
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <code className="flex-1 min-w-0 break-all px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 font-mono text-xs">
+              {data?.suffix}
+            </code>
+            <button
+              onClick={handleCopy}
+              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity text-xs font-medium"
+            >
+              {copied ? (
+                <>
+                  <Check size={14} /> 已复制
+                </>
+              ) : (
+                <>
+                  <Copy size={14} /> 复制
+                </>
+              )}
+            </button>
+          </div>
+          <div className="mt-2 text-[11px] text-muted-foreground">
+            字符集 {data?.charset}，长度 {data?.min_len} - {data?.max_len}
+          </div>
+
+          {editing && (
+            <div className="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900">
+              <label className="block text-xs font-medium mb-1">
+                自定义新后缀
+              </label>
+              <input
+                className="input font-mono text-sm"
+                placeholder="例如：mySecret_-abc12"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                autoFocus
+              />
+              <div className="text-[11px] text-muted-foreground mt-1">
+                {draft && !valid
+                  ? '格式不合法：需 8-32 位字母 / 数字 / _ / -'
+                  : '提交后旧 URL 立即失效，前端会自动用新后缀'}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={!valid || updateMut.isPending}
+                  onClick={() => setConfirm({ kind: 'update-path', suffix: draft })}
+                >
+                  确认更新
+                </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setEditing(false);
+                    setDraft('');
+                  }}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 pt-4 border-t border-border/50 dark:border-gray-800/50 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setConfirm({ kind: 'rotate-path' })}
+              disabled={rotateMut.isPending || updateMut.isPending}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-xs font-medium disabled:opacity-50"
+            >
+              <RefreshCw size={14} /> 重新生成
+            </button>
+            <button
+              onClick={() => {
+                setEditing(true);
+                setDraft('');
+              }}
+              disabled={rotateMut.isPending || updateMut.isPending || editing}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-xs font-medium disabled:opacity-50"
+            >
+              <Pencil size={14} /> 自定义
+            </button>
+            <div className="text-[11px] text-muted-foreground ml-auto">
+              切换后浏览器会保留登录态，仅访问 URL 改变
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={confirm?.kind === 'rotate-path'}
+        title="重新生成 Admin 访问路径？"
+        description="新路径会立即生效，原 URL 立刻 404。当前已经打开的 admin 浏览器标签会无缝继续工作（前端自动跟踪），但其他记着旧 URL 的书签 / 历史会失效。"
+        confirmLabel="确认重新生成"
+        danger
+        onConfirm={handleConfirm}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm?.kind === 'update-path'}
+        title="更新 Admin 访问路径？"
+        description={`将切换到「${
+          confirm?.kind === 'update-path' ? confirm.suffix : ''
+        }」，旧 URL 立即失效。新路径请记录到密码管理器或带外渠道。`}
+        confirmLabel="确认更新"
+        danger
+        onConfirm={handleConfirm}
+        onCancel={() => setConfirm(null)}
+      />
+    </div>
+  );
+}
 
 export default function Security() {
   const qc = useQueryClient();
@@ -66,16 +286,23 @@ export default function Security() {
     const p =
       confirm.kind === 'regenerate'
         ? generateMut.mutateAsync()
-        : revokeMut.mutateAsync();
+        : confirm.kind === 'revoke'
+          ? revokeMut.mutateAsync()
+          : Promise.resolve();
     p.finally(() => setConfirm(null));
   }
 
   return (
     <div>
       <h2 className="text-lg font-semibold mb-1">安全</h2>
-      <div className="text-xs text-muted-foreground mb-4">SDK manifest 签名配置</div>
+      <div className="text-xs text-muted-foreground mb-4">
+        Admin 访问路径 + SDK manifest 签名配置
+      </div>
 
-      <div className="card dark:bg-gray-900 slide-up">
+      <div className="space-y-4">
+        <AdminPathCard />
+
+        <div className="card dark:bg-gray-900 slide-up">
         <div className="flex items-start gap-4">
           <div className="p-3 bg-primary/10 rounded-xl">
             <KeyRound size={20} className="text-primary" />
@@ -182,6 +409,7 @@ export default function Security() {
               </div>
             )}
           </div>
+        </div>
         </div>
       </div>
 

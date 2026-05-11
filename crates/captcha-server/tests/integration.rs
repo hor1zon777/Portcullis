@@ -43,8 +43,13 @@ fn test_config() -> Config {
         config_path: None,
         manifest_signing_key: None,
         admin_webhook_url: None,
+        // v1.6.0：测试用固定 suffix，便于所有 admin 测试用同一段路径
+        admin_path_suffix: Some(TEST_ADMIN_PATH.to_string()),
     }
 }
+
+/// 测试用固定 admin path suffix。长度满足 8-32，字符集 URL-safe。
+const TEST_ADMIN_PATH: &str = "testpath00";
 
 async fn post_json<T: DeserializeOwned>(
     app: &axum::Router,
@@ -503,7 +508,7 @@ async fn admin_manifest_pubkey_disabled() {
 
     let req = Request::builder()
         .method("GET")
-        .uri("/admin/api/manifest-pubkey")
+        .uri("/admin/testpath00/api/manifest-pubkey")
         .header("authorization", "Bearer test-admin-token")
         .body(Body::empty())
         .unwrap();
@@ -535,7 +540,7 @@ async fn admin_manifest_pubkey_enabled_returns_matching_key() {
 
     let req = Request::builder()
         .method("GET")
-        .uri("/admin/api/manifest-pubkey")
+        .uri("/admin/testpath00/api/manifest-pubkey")
         .header("authorization", "Bearer test-admin-token")
         .body(Body::empty())
         .unwrap();
@@ -561,7 +566,7 @@ async fn admin_manifest_pubkey_requires_auth() {
 
     let req = Request::builder()
         .method("GET")
-        .uri("/admin/api/manifest-pubkey")
+        .uri("/admin/testpath00/api/manifest-pubkey")
         .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
@@ -584,7 +589,7 @@ async fn admin_generate_manifest_key_from_empty() {
     // 1. POST /generate
     let gen_req = Request::builder()
         .method("POST")
-        .uri("/admin/api/manifest-pubkey/generate")
+        .uri("/admin/testpath00/api/manifest-pubkey/generate")
         .header("authorization", "Bearer test-admin-token")
         .body(Body::empty())
         .unwrap();
@@ -610,7 +615,7 @@ async fn admin_generate_manifest_key_from_empty() {
     // 3. ArcSwap 配置已更新：GET 应返回相同公钥
     let get_req = Request::builder()
         .method("GET")
-        .uri("/admin/api/manifest-pubkey")
+        .uri("/admin/testpath00/api/manifest-pubkey")
         .header("authorization", "Bearer test-admin-token")
         .body(Body::empty())
         .unwrap();
@@ -661,7 +666,7 @@ async fn admin_generate_manifest_key_overwrite() {
 
     let req = Request::builder()
         .method("POST")
-        .uri("/admin/api/manifest-pubkey/generate")
+        .uri("/admin/testpath00/api/manifest-pubkey/generate")
         .header("authorization", "Bearer test-admin-token")
         .body(Body::empty())
         .unwrap();
@@ -691,7 +696,7 @@ async fn admin_revoke_manifest_key() {
     // 撤销
     let req = Request::builder()
         .method("DELETE")
-        .uri("/admin/api/manifest-pubkey")
+        .uri("/admin/testpath00/api/manifest-pubkey")
         .header("authorization", "Bearer test-admin-token")
         .body(Body::empty())
         .unwrap();
@@ -708,7 +713,7 @@ async fn admin_revoke_manifest_key() {
     // 状态回到 enabled=false
     let get_req = Request::builder()
         .method("GET")
-        .uri("/admin/api/manifest-pubkey")
+        .uri("/admin/testpath00/api/manifest-pubkey")
         .header("authorization", "Bearer test-admin-token")
         .body(Body::empty())
         .unwrap();
@@ -720,7 +725,7 @@ async fn admin_revoke_manifest_key() {
     // 再次撤销应是幂等 ok:true removed:false
     let req2 = Request::builder()
         .method("DELETE")
-        .uri("/admin/api/manifest-pubkey")
+        .uri("/admin/testpath00/api/manifest-pubkey")
         .header("authorization", "Bearer test-admin-token")
         .body(Body::empty())
         .unwrap();
@@ -1579,7 +1584,7 @@ async fn audit_list_records_site_create() {
     // 通过 admin API 创建一个新站点
     let (status, _): (_, serde_json::Value) = post_json_auth(
         &app,
-        "/admin/api/sites",
+        "/admin/testpath00/api/sites",
         json!({"diff": 10, "origins": []}),
         token,
     )
@@ -1591,7 +1596,7 @@ async fn audit_list_records_site_create() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     let (status, audit_resp): (_, AuditListResp) =
-        get_json_auth(&app, "/admin/api/audit?limit=50", token).await;
+        get_json_auth(&app, "/admin/testpath00/api/audit?limit=50", token).await;
     assert_eq!(status, StatusCode::OK);
     assert!(audit_resp.total >= 1);
     let create_entry = audit_resp
@@ -1622,7 +1627,7 @@ async fn admin_login_fail_recorded_in_audit() {
     // 用错误 token 调一个 admin endpoint
     let req = Request::builder()
         .method("GET")
-        .uri("/admin/api/sites")
+        .uri("/admin/testpath00/api/sites")
         .header("authorization", "Bearer WRONG-TOKEN-xxxxxxxxxxxxxxxxxxx")
         .body(Body::empty())
         .unwrap();
@@ -1633,7 +1638,7 @@ async fn admin_login_fail_recorded_in_audit() {
 
     // 查审计（用合法 token）
     let (status, audit_resp): (_, AuditListResp) =
-        get_json_auth(&app, "/admin/api/audit?action=login.fail", token).await;
+        get_json_auth(&app, "/admin/testpath00/api/audit?action=login.fail", token).await;
     assert_eq!(status, StatusCode::OK);
     assert!(audit_resp.total >= 1, "login.fail 应当至少有 1 条记录");
     assert!(
@@ -1659,7 +1664,7 @@ async fn admin_ban_after_many_failures_returns_429() {
     for i in 0..30 {
         let req = Request::builder()
             .method("GET")
-            .uri("/admin/api/sites")
+            .uri("/admin/testpath00/api/sites")
             .header(
                 "authorization",
                 format!("Bearer wrong-{i}-xxxxxxxxxxxxxxxx"),
@@ -1673,7 +1678,7 @@ async fn admin_ban_after_many_failures_returns_429() {
     // 第 31 次应该被 ban（返回 429）
     let req = Request::builder()
         .method("GET")
-        .uri("/admin/api/sites")
+        .uri("/admin/testpath00/api/sites")
         .header("authorization", "Bearer yet-another-wrong-xxxxxxxxxxxxxxx")
         .header("x-forwarded-for", "203.0.113.99")
         .body(Body::empty())
@@ -1697,7 +1702,7 @@ async fn create_site_returns_plaintext_secret_key_once() {
     // 创建时返回明文
     let (status, body): (_, serde_json::Value) = post_json_auth(
         &app,
-        "/admin/api/sites",
+        "/admin/testpath00/api/sites",
         json!({"diff": 10, "origins": []}),
         token,
     )
@@ -1710,7 +1715,7 @@ async fn create_site_returns_plaintext_secret_key_once() {
 
     // list 接口同样返回明文（用户要求 secret_key 在管理面板可再次查看）
     let (_, sites): (_, serde_json::Value) =
-        get_json_auth(&app, "/admin/api/sites", token).await;
+        get_json_auth(&app, "/admin/testpath00/api/sites", token).await;
     let arr = sites.as_array().unwrap();
     let this = arr.iter().find(|s| s["key"] == site_key).unwrap();
     assert_eq!(this["secret_key"], plain_secret);
@@ -1760,10 +1765,10 @@ async fn batch_verify_records_per_item_side_effects() {
     // 注意 batch 中前三条因为同一 challenge_id 重放/签名失败，但全部仍要计入日志
     let req = Request::builder()
         .method("GET")
-        .uri("/admin/api/logs")
+        .uri("/admin/testpath00/api/logs")
         .body(Body::empty())
         .unwrap();
-    // /admin/api/logs 需 admin_token，本测试 config 没启用 admin，
+    // /admin/testpath00/api/logs 需 admin_token，本测试 config 没启用 admin，
     // 改为直接断言 request_log 计数与 DB 日志行数：
 
     // 走一条带 admin 的新 router 做最终断言更稳。这里简化：检查 request_log 计数器和 DB 表
@@ -1899,7 +1904,7 @@ async fn admin_token_length_does_not_short_circuit() {
     for wrong in &["x", "wrong", &"x".repeat(100), ""] {
         let req = Request::builder()
             .method("GET")
-            .uri("/admin/api/sites")
+            .uri("/admin/testpath00/api/sites")
             .header("authorization", format!("Bearer {wrong}"))
             .body(Body::empty())
             .unwrap();
@@ -1914,8 +1919,260 @@ async fn admin_token_length_does_not_short_circuit() {
     // 正确 token 仍能通过
     let req = Request::builder()
         .method("GET")
-        .uri("/admin/api/sites")
+        .uri("/admin/testpath00/api/sites")
         .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+// ───────────── v1.6.0 admin path suffix ─────────────
+
+/// 错误 suffix 一律 404（不应暴露 admin 入口存在）。
+#[tokio::test]
+async fn admin_wrong_path_suffix_returns_404() {
+    let token = "admin-token-sample-at-least-16-chars";
+    let app = build_router(
+        AppState::new(
+            test_config_with_admin(token),
+            captcha_server::db::open_memory(),
+        ),
+        None,
+        None,
+    );
+
+    for wrong in &[
+        "/admin/wrongsuffix/api/sites",
+        "/admin/api/sites", // 老的、不带 suffix 的 URL
+        "/admin//api/sites",
+        "/admin/testpath01/api/sites", // 长度对但内容不同
+    ] {
+        let req = Request::builder()
+            .method("GET")
+            .uri(*wrong)
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::NOT_FOUND,
+            "错误 suffix 应 404: {wrong}"
+        );
+    }
+}
+
+/// GET /admin/{suffix}/api/admin-path 返回当前生效的 suffix（说明：进得来就是因为有合法 suffix）。
+#[tokio::test]
+async fn admin_path_get_returns_current_suffix() {
+    let token = "admin-token-sample-at-least-16-chars";
+    let app = build_router(
+        AppState::new(
+            test_config_with_admin(token),
+            captcha_server::db::open_memory(),
+        ),
+        None,
+        None,
+    );
+
+    let (status, body): (_, serde_json::Value) =
+        get_json_auth(&app, "/admin/testpath00/api/admin-path", token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["suffix"], "testpath00");
+    assert_eq!(body["min_len"], 8);
+    assert_eq!(body["max_len"], 32);
+}
+
+/// PUT /admin/{suffix}/api/admin-path 自定义 suffix，旧 URL 立即失效。
+#[tokio::test]
+async fn admin_path_update_invalidates_old_url() {
+    let token = "admin-token-sample-at-least-16-chars";
+    let db = captcha_server::db::open_memory();
+    let state = AppState::new(test_config_with_admin(token), db.clone());
+    let app = build_router(state.clone(), None, None);
+
+    let new_suffix = "newSecret_-AB123";
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/admin/testpath00/api/admin-path")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({"suffix": new_suffix})).unwrap(),
+        ))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["suffix"], new_suffix);
+
+    // DB 真相
+    assert_eq!(
+        captcha_server::db::load_server_secret_string(&db, "admin_path_suffix").as_deref(),
+        Some(new_suffix)
+    );
+
+    // 旧 URL 立即失效
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/testpath00/api/sites")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // 新 URL 可用
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/admin/{new_suffix}/api/sites"))
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+/// PUT /admin-path 非法字符 / 长度越界 → 400。
+#[tokio::test]
+async fn admin_path_update_rejects_invalid_suffix() {
+    let token = "admin-token-sample-at-least-16-chars";
+    let app = build_router(
+        AppState::new(
+            test_config_with_admin(token),
+            captcha_server::db::open_memory(),
+        ),
+        None,
+        None,
+    );
+
+    for bad in &[
+        "short",                 // 长 5
+        &"a".repeat(33),         // 长 33
+        "has space",             // 含空格
+        "slash/here",            // 含斜杠
+        "中文12345678",          // 中文
+    ] {
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/admin/testpath00/api/admin-path")
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({"suffix": bad})).unwrap(),
+            ))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "非法 suffix 应被拒: {bad}"
+        );
+    }
+}
+
+/// POST /admin-path/rotate 自动生成新 suffix，旧 URL 立即失效。
+#[tokio::test]
+async fn admin_path_rotate_invalidates_old_url() {
+    let token = "admin-token-sample-at-least-16-chars";
+    let db = captcha_server::db::open_memory();
+    let state = AppState::new(test_config_with_admin(token), db.clone());
+    let app = build_router(state, None, None);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/testpath00/api/admin-path/rotate")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let new_suffix = v["suffix"].as_str().unwrap().to_string();
+    assert_ne!(new_suffix, "testpath00");
+    captcha_server::config::validate_admin_path_suffix(&new_suffix)
+        .expect("rotate 生成的 suffix 应通过校验");
+
+    // DB 已更新
+    assert_eq!(
+        captcha_server::db::load_server_secret_string(&db, "admin_path_suffix"),
+        Some(new_suffix.clone())
+    );
+
+    // 旧 URL 失效
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/testpath00/api/sites")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // 新 URL 可用
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/admin/{new_suffix}/api/sites"))
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+/// path_check 在 auth 之前：即便 token 正确，错误 suffix 也不应触发 admin 失败计数器。
+/// 这是为了避免攻击者用"猜 suffix"耗尽真实 admin 的失败配额。
+#[tokio::test]
+async fn admin_wrong_suffix_does_not_count_as_login_fail() {
+    let token = "admin-token-sample-at-least-16-chars";
+    let app = build_router(
+        AppState::new(
+            test_config_with_admin(token),
+            captcha_server::db::open_memory(),
+        ),
+        None,
+        None,
+    );
+
+    // 用错误 suffix + 正确 token 调一波 admin endpoint
+    for _ in 0..40 {
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/wrongsuffix0/api/sites")
+            .header("authorization", format!("Bearer {token}"))
+            .header("x-forwarded-for", "203.0.113.7")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    // 等待 audit 落盘
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // login.fail audit 应当为 0（path_check 在 auth 之前，错误 suffix 直接 404 不进 auth）
+    let (status, audit_resp): (_, AuditListResp) = get_json_auth(
+        &app,
+        "/admin/testpath00/api/audit?action=login.fail",
+        token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        audit_resp.total, 0,
+        "错误 suffix 不应触发 admin 失败计数 / 审计"
+    );
+
+    // 正确 suffix + 正确 token 仍应通过（说明这 40 次错误尝试没把 IP 拉黑）
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/testpath00/api/sites")
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-forwarded-for", "203.0.113.7")
         .body(Body::empty())
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
