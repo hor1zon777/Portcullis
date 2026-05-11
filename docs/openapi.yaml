@@ -1,13 +1,19 @@
 openapi: 3.1.0
 info:
   title: PoW CAPTCHA API
-  version: 1.5.0
+  version: 1.6.0
   description: |
     基于 Argon2id + SHA-256 双阶段工作量证明的验证码服务。
     - /api/v1/challenge：发放挑战（v1.3+ 含 Argon2 参数 m/t/p_cost）
     - /api/v1/verify：校验解答，返回 captcha_token（v1.4+ 可按站点绑定 IP/UA）
     - /api/v1/siteverify：业务后端核验 token（v1.4+ 可选 client_ip/user_agent）
-    - /admin/api/*：管理员 API（Bearer Token），含 v1.5+ 审计端点
+    - /admin/{admin_suffix}/api/*：管理员 API（Bearer Token），含 v1.5+ 审计端点
+
+    v1.6+ 起所有 admin 路径都带一个随机 `{admin_suffix}` 段（URL-safe 8-32 字符），
+    错误的 suffix 一律返回 404，**不暴露 admin 入口存在**。suffix 在首次启动时
+    由服务端随机生成（写入 SQLite，重启后保留），可在管理面板「安全 → Admin
+    访问路径」查看 / 自定义 / rotate。Suffix 鉴权位于 token 鉴权之前，错误的
+    suffix 不消耗 admin 失败 ban 配额。
 
 servers:
   - url: http://localhost:8787
@@ -171,7 +177,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SiteVerifyResponse'
 
-  /admin/api/stats:
+  /admin/{admin_suffix}/api/stats:
     get:
       summary: 服务指标（需 admin token）
       operationId: adminStats
@@ -185,7 +191,7 @@ paths:
               schema:
                 type: object
 
-  /admin/api/sites:
+  /admin/{admin_suffix}/api/sites:
     get:
       summary: 列出所有站点
       operationId: adminListSites
@@ -261,7 +267,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /admin/api/sites/{key}:
+  /admin/{admin_suffix}/api/sites/{key}:
     put:
       summary: 更新站点
       operationId: adminUpdateSite
@@ -320,7 +326,7 @@ paths:
         '404':
           description: 站点不存在
 
-  /admin/api/logs:
+  /admin/{admin_suffix}/api/logs:
     get:
       summary: 请求日志（最近 200 条）
       operationId: adminLogs
@@ -336,7 +342,7 @@ paths:
                 items:
                   type: object
 
-  /admin/api/risk/ips:
+  /admin/{admin_suffix}/api/risk/ips:
     get:
       summary: IP 风控状态
       operationId: adminRiskIps
@@ -350,7 +356,7 @@ paths:
               schema:
                 type: object
 
-  /admin/api/risk/block:
+  /admin/{admin_suffix}/api/risk/block:
     post:
       summary: 封禁 IP
       operationId: adminBlockIp
@@ -390,7 +396,7 @@ paths:
         '200':
           description: 解封成功
 
-  /admin/api/manifest-pubkey:
+  /admin/{admin_suffix}/api/manifest-pubkey:
     get:
       summary: 查询 Ed25519 manifest 公钥
       operationId: adminManifestPubkey
@@ -420,7 +426,7 @@ paths:
         '200':
           description: 撤销成功（幂等）
 
-  /admin/api/manifest-pubkey/generate:
+  /admin/{admin_suffix}/api/manifest-pubkey/generate:
     post:
       summary: 一键生成 manifest 签名密钥对
       operationId: adminGenerateManifestKey
@@ -430,7 +436,7 @@ paths:
         '200':
           description: 生成成功（覆盖已有密钥）
 
-  /admin/api/audit:
+  /admin/{admin_suffix}/api/audit:
     get:
       summary: 管理员操作审计列表（v1.5+）
       operationId: adminAudit
@@ -469,6 +475,87 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/AuditEntry'
+
+  /admin/{admin_suffix}/api/admin-path:
+    get:
+      summary: 查询当前 admin 访问后缀（v1.6+）
+      operationId: adminPathGet
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 当前 suffix + 长度 / 字符集约束
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  suffix:
+                    type: string
+                    description: 当前生效的 admin path suffix
+                  min_len:
+                    type: integer
+                    example: 8
+                  max_len:
+                    type: integer
+                    example: 32
+                  charset:
+                    type: string
+                    example: "[A-Za-z0-9_-]"
+    put:
+      summary: 自定义 admin 访问后缀（v1.6+）
+      operationId: adminPathUpdate
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [suffix]
+              properties:
+                suffix:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{8,32}$'
+                  description: 新 suffix，提交后旧 URL 立即 404
+      responses:
+        '200':
+          description: 更新成功，新 URL 立即生效
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  suffix:
+                    type: string
+                  note:
+                    type: string
+        '400':
+          description: 字符集 / 长度非法
+
+  /admin/{admin_suffix}/api/admin-path/rotate:
+    post:
+      summary: 重新生成 admin 访问后缀（v1.6+）
+      operationId: adminPathRotate
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 已生成新随机 suffix（16 字符），旧 URL 立即失效
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  suffix:
+                    type: string
+                  note:
+                    type: string
 
   /healthz:
     get:
@@ -574,6 +661,21 @@ components:
       type: http
       scheme: bearer
       bearerFormat: admin_token
+
+  parameters:
+    AdminSuffix:
+      name: admin_suffix
+      in: path
+      required: true
+      description: |
+        服务端持久化的 admin 路径后缀（URL-safe 8-32 字符）。
+        启动时由服务端随机生成 16 字符串并写入 SQLite；
+        可在管理面板 rotate / 自定义。**错误的 suffix 一律 404**，
+        且不会消耗 admin 登录失败 ban 配额（path 校验在 token 校验之前）。
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{8,32}$'
+        example: Aa1_-bcde234567
 
   schemas:
     Challenge:

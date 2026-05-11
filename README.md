@@ -4,7 +4,7 @@
 
 **Argon2id 内存硬化 + SHA-256 快速迭代 | 单二进制 | 一行 `<script>` 接入 | 零第三方依赖**
 
-> **当前版本：v1.5.0** · 服务端密钥 HMAC 化 · admin 操作审计 · 双 key 轮换 · webhook 通知
+> **当前版本：v1.6.0** · Admin URL 随机后缀（路径级隐藏） · 限流器与批量接口安全修复 · 双 key 轮换 · 操作审计 · webhook 通知
 
 ---
 
@@ -29,11 +29,14 @@
 ./captcha-server gen-config > captcha.toml
 ./captcha-server gen-secret  # 将输出填入 captcha.toml 的 secret 字段
 ./captcha-server --config captcha.toml
+# 服务启动后会在日志输出一行：
+#   管理后台路径：/admin/{suffix}/api/...
+# 把 {suffix} 抄给浏览器登录页使用。
 
 # 方式 B：Docker Compose（3 服务：server + admin-ui + nginx）
 mkdir -p data          # 创建数据目录
 docker compose up -d
-# → http://localhost/admin/   管理面板
+# → http://localhost/admin/   管理面板（登录页会要求输入 admin token + 访问路径）
 # → http://localhost/api/...  公共 API
 ```
 
@@ -160,9 +163,10 @@ curl -X POST https://your-captcha-server.com/api/v1/siteverify \
 - Argon2id 内存硬化，**参数每 challenge 下发并经 HMAC 签名保护**（v1.3+），默认 19 MiB/2 轮
 - HMAC-SHA256 常数时间签名校验，支持 `CAPTCHA_SECRET` 双 key 无缝轮换（v1.5+）
 - `secret_key` 服务端 HMAC 化存储，DB 泄漏不再等于密钥泄漏（v1.5+）
+- **Admin URL 随机后缀**（v1.6+）：`/admin/{suffix}/api/*`，错误 suffix 一律 404 不暴露入口；suffix 可在面板 rotate / 自定义，立即生效
 - Token 单次使用 + 5 分钟过期；opt-in 绑定 client IP / User-Agent（v1.4+）
 - CORS 按站点白名单 + Origin 校验
-- IP 限流（令牌桶，5 req/s burst 20）；admin 登录 30 次失败触发 15 分钟 ban（v1.5+）
+- IP 限流（令牌桶，5 req/s burst 20，**v1.6 修复了清理逻辑误删正常用户桶的问题**）；admin 登录 30 次失败触发 15 分钟 ban（v1.5+）
 - 安全头（X-Content-Type-Options / X-Frame-Options / Referrer-Policy）
 
 ### SDK 完整性（v1.2.x）
@@ -185,10 +189,11 @@ curl -X POST https://your-captcha-server.com/api/v1/siteverify \
 
 ### 管理面板
 - **React 可视化面板**（`/admin/`）：监控仪表盘 · 站点 · 日志 · 风控 · 安全 · **审计**（v1.5+）
+- Token + Admin 访问路径双重凭据登录（v1.6+，路径由服务端随机生成，可面板 rotate）
 - Token 认证 + 10 秒自动刷新，深色模式
 - 站点新增/删除立即热重载，IP 封禁/解封实时生效
 - 每站点可视化配置 Argon2 参数（m/t_cost）、Token 身份绑定开关
-- 「安全」页一键生成/撤销 Ed25519 manifest 签名密钥
+- 「安全」页一键生成/撤销 Ed25519 manifest 签名密钥；rotate / 自定义 Admin 访问路径（v1.6+）
 - 「审计」页按 action 过滤 + 分页，500 条/页
 
 ### 部署
@@ -271,16 +276,18 @@ token = "运行 captcha-server gen-secret 生成"
 |------|------|------|
 | `/api/v1/challenge` | POST | 发放挑战（响应含 Argon2 参数 m/t/p_cost，v1.3+） |
 | `/api/v1/verify` | POST | 提交解答 → captcha_token（按 site 开关绑定 IP/UA，v1.4+） |
-| `/api/v1/verify/batch` | POST | 批量校验（最多 20 条） |
+| `/api/v1/verify/batch` | POST | 批量校验（最多 20 条；v1.6 起每条 item 单独计入风控 / 请求日志） |
 | `/api/v1/siteverify` | POST | 业务后端核验 token（可传 client_ip / user_agent，v1.4+） |
-| `/admin/api/sites` | GET/POST | 站点列表 / 创建（创建响应含一次性明文 secret_key，v1.5+） |
-| `/admin/api/sites/:key` | PUT/DELETE | 站点更新 / 删除 |
-| `/admin/api/logs` | GET | 请求日志（最近 200 条） |
-| `/admin/api/risk/ips` | GET | IP 风控状态 |
-| `/admin/api/risk/block` | POST/DELETE | IP 封禁 / 解封 |
-| `/admin/api/manifest-pubkey` | GET/DELETE | 查询 / 撤销 Ed25519 manifest 公钥 |
-| `/admin/api/manifest-pubkey/generate` | POST | 一键生成 manifest 签名密钥对 |
-| `/admin/api/audit` | GET | 管理员操作审计（v1.5+，支持 `?action=` 过滤） |
+| `/admin/{suffix}/api/sites` | GET/POST | 站点列表 / 创建（创建响应含一次性明文 secret_key，v1.5+） |
+| `/admin/{suffix}/api/sites/:key` | PUT/DELETE | 站点更新 / 删除（v1.6 起多字段更新走单事务） |
+| `/admin/{suffix}/api/logs` | GET | 请求日志（最近 200 条） |
+| `/admin/{suffix}/api/risk/ips` | GET | IP 风控状态 |
+| `/admin/{suffix}/api/risk/block` | POST/DELETE | IP 封禁 / 解封 |
+| `/admin/{suffix}/api/manifest-pubkey` | GET/DELETE | 查询 / 撤销 Ed25519 manifest 公钥 |
+| `/admin/{suffix}/api/manifest-pubkey/generate` | POST | 一键生成 manifest 签名密钥对 |
+| `/admin/{suffix}/api/audit` | GET | 管理员操作审计（v1.5+，支持 `?action=` 过滤） |
+| `/admin/{suffix}/api/admin-path` | GET/PUT | 查询 / 自定义 admin 访问后缀（v1.6+） |
+| `/admin/{suffix}/api/admin-path/rotate` | POST | 重新生成 admin 访问后缀（v1.6+） |
 | `/admin/` | GET | React 管理面板（Docker Compose 模式） |
 | `/sdk/manifest.json` | GET | SDK 版本 + SRI integrity 清单；opt-in 带 Ed25519 签名 |
 | `/sdk/v{version}/*` | GET | 版本化只读路径（`immutable` 长缓存，配合 SRI） |
@@ -288,6 +295,8 @@ token = "运行 captcha-server gen-secret 生成"
 | `/metrics` | GET | Prometheus 指标 |
 | `/healthz` | GET | 健康检查 |
 
+> `{suffix}` 是首次启动时服务端随机生成的 URL-safe 段（`[A-Za-z0-9_-]{8,32}`，默认 16 字符），保存在 SQLite。错误 suffix **一律 404**，且不会消耗 admin 登录失败配额。首次启动日志会输出该值；之后可在管理面板「安全」页 rotate / 自定义。
+>
 > `/api/v1/*` 格式自 v1.0.0 起冻结。新增字段向后兼容，详见 [API 稳定性承诺](docs/API_STABILITY.md)。
 > SDK 分发策略详见 [Tier 1 实施](docs/TIER1_IMPLEMENTATION.md)、[Tier 2 实施](docs/TIER2_IMPLEMENTATION.md)。
 
@@ -347,7 +356,9 @@ pnpm dev
 实际监听：
 
 - Rust 服务：`127.0.0.1:8787`（仅 loopback，配置来自 `captcha.dev.toml`）
-- Vite：`127.0.0.1:5173`，把 `/api`、`/admin/api`、`/sdk`、`/healthz`、`/metrics` 反代到 8787
+- Vite：`127.0.0.1:5173`，把 `/api`、`/admin/`（含 `{suffix}` 路径段）、`/sdk`、`/healthz`、`/metrics` 反代到 8787
+
+启动后看 Rust 进程日志，会输出 `管理后台路径：/admin/{suffix}/api/...`，拿到 `{suffix}` 后在登录页填入"Admin 访问路径"。
 
 `Ctrl+C` 同时退出两个进程。如需 SDK 源码 HMR，另起 `pnpm -C sdk dev`。
 

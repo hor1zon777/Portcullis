@@ -1,5 +1,9 @@
 # 本地开发配置（已提交）。内含的 secret / token 仅用于开发，请勿用于生产。
 # 使用方式：从仓库根执行 `pnpm dev`，会自动 `cargo run -- --config captcha.dev.toml`。
+#
+# v1.6+ 提示：admin API 形如 /admin/{suffix}/api/...。
+# 首次启动会把生成的 suffix 输出到日志，登录管理面板时填到 "Admin 访问路径" 字段。
+# 之后可在面板「安全」页 rotate / 自定义；本 toml 不直接配置 suffix（始终从 DB 加载）。
 
 [server]
 bind = "127.0.0.1:8787"

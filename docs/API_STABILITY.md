@@ -8,14 +8,14 @@
 |------|------|------|
 | `POST /api/v1/challenge` | 冻结 | 响应 `challenge` 对象可能新增字段（v1.3 加了 `m_cost` / `t_cost` / `p_cost`） |
 | `POST /api/v1/verify` | 冻结 | 请求体照原样回传 challenge，服务端会解析新字段 |
-| `POST /api/v1/verify/batch` | 冻结 | — |
+| `POST /api/v1/verify/batch` | 冻结 | v1.6 起每条 item 单独计入风控 / 请求日志；失败 item 的 `error` 字段从 Debug 格式改为 Display（人类可读消息） |
 | `POST /api/v1/siteverify` | 冻结 | 请求体允许新增 optional 字段（v1.4 加了 `client_ip` / `user_agent`） |
 | `GET /healthz` | 冻结 | — |
 | `GET /metrics` | 冻结 | Prometheus 格式，指标名称冻结 |
 | `GET /sdk/*` | 冻结 | 文件路由冻结，内容随版本更新 |
 | `GET /sdk/manifest.json` | 冻结（v1.2+） | 结构冻结；可选 `X-Portcullis-Signature` 响应头 |
 | `GET /sdk/v{version}/*` | 冻结（v1.2+） | 版本化 immutable 路径 |
-| `/admin/api/*` | **非正式契约** | 管理 API 与管理面板配套演进，可能随版本扩展/改动 |
+| `/admin/{suffix}/api/*`（v1.6+） | **非正式契约** | 管理 API 与管理面板配套演进，可能随版本扩展/改动；`{suffix}` 为服务端持久化的随机段，错误 suffix 一律 404 |
 
 ## 兼容性规则
 
@@ -35,7 +35,7 @@
 - 删除端点
 - 修改 `/api/v1/*` 请求体的**必填**字段列表
 
-## 已发生的兼容性演进（v1.0 → v1.5）
+## 已发生的兼容性演进（v1.0 → v1.6）
 
 | 版本 | 新增 | 向后兼容性 |
 |------|------|-----------|
@@ -43,6 +43,7 @@
 | v1.3 | `challenge.m_cost` / `t_cost` / `p_cost` 字段；签名字节序列扩展 | 旧客户端 JSON 无新字段时 `serde(default)` 回填 legacy `4096/1/1`；新老服务端可并存（但新服务端发给旧 SDK 会失败）|
 | v1.4 | `token.payload.ip_hash` / `ua_hash`（opt-in）；`/api/v1/siteverify` 请求体新增 `client_ip` / `user_agent` | 未启用绑定的 site 完全向后兼容 |
 | v1.5 | `/admin/api/audit` 端点；`SiteView.secret_key` 返回 `"(hashed)"` 占位；`secret_key_hashed` 字段；**服务端内部 `secret_key` 改 HMAC 存储** | `/api/v1/*` 外部 API 完全兼容；**`secret_key` hash 化是单向 DB 迁移**，升级前必须备份原文 |
+| v1.6 | admin API 路径 `/admin/api/*` → `/admin/{suffix}/api/*`；新增 `/admin/{suffix}/api/admin-path` GET/PUT 和 `/admin-path/rotate` POST；批量 verify 错误格式改为 Display | `/api/v1/*` 完全不受影响；**admin 路径是 breaking change**，需要在新 URL 中加 suffix 段，suffix 在首次启动日志输出 |
 
 ## SDK 版本
 
@@ -51,7 +52,7 @@
 
 ```html
 <!-- v1.2+ 推荐 -->
-<script src="https://captcha.example.com/sdk/v1.5.0/pow-captcha.js"
+<script src="https://captcha.example.com/sdk/v1.6.0/pow-captcha.js"
         integrity="sha384-..."
         crossorigin="anonymous"></script>
 

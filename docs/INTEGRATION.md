@@ -12,7 +12,7 @@
 | `CAPTCHA_SITES` | 否 | `{}` | 站点配置 JSON（也可通过 TOML / 管理面板 CRUD） |
 | `CAPTCHA_TOKEN_TTL_SECS` | 否 | `300` | captcha_token 有效期 |
 | `CAPTCHA_CHALLENGE_TTL_SECS` | 否 | `120` | 挑战有效期 |
-| `CAPTCHA_ADMIN_TOKEN` | 否 | — | 开启 `/admin/api/*` 的 Bearer Token，未设时管理面板禁用 |
+| `CAPTCHA_ADMIN_TOKEN` | 否 | — | 开启 `/admin/{suffix}/api/*` 的 Bearer Token，未设时管理面板禁用。v1.6+ 起 admin 路径含随机 `{suffix}` 段，启动期日志输出 |
 | `CAPTCHA_MANIFEST_SIGNING_KEY` | 否 | — | Ed25519 manifest 签名私钥 seed（base64）；也可在面板「安全」页生成 |
 | `CAPTCHA_ADMIN_WEBHOOK_URL` | 否 | — | v1.5+ 关键操作 webhook（Slack Incoming Webhook 兼容） |
 

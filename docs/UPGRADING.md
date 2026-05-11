@@ -1,8 +1,96 @@
 # 升级指南
 
-> 最新版本：**v1.5.0**（服务端密钥与审计硬化）
+> 最新版本：**v1.6.0**（Admin URL 后缀 + CRITICAL/HIGH 修复）
 
 PoW CAPTCHA 的核心算法由客户端 WASM 与服务端共同执行，因此在 v1.2.x 之前**客户端与服务端必须编译自同一套 Argon2 参数**。v1.3.0 起，参数从 `challenge` 下发并由 HMAC 签名覆盖，客户端只需根据 challenge 内容动态构建 Argon2 实例，升级耦合大幅降低。
+
+---
+
+## v1.5.x → v1.6.0
+
+### 1. 核心改动
+
+| 变化 | 含义 |
+|------|------|
+| 所有 admin API 从 `/admin/api/*` 改为 `/admin/{suffix}/api/*` | 路径级隐藏，错误 suffix 一律 404 不暴露 admin 入口 |
+| suffix 启动期自动生成 16 字符 URL-safe 串，落 SQLite `server_secrets` 表 | 升级即生效；首次启动日志输出该值 |
+| 新增 `GET/PUT /admin/{suffix}/api/admin-path` 和 `POST .../rotate` | 管理面板可查看 / 自定义 / 重新生成 |
+| `path_check` middleware 在 `auth` 之前 | 错误 suffix 不计入 admin 失败 ban 配额，攻击者不能通过"猜 suffix"耗尽真实管理员的失败计数 |
+| **CRITICAL/HIGH** 修复：限流器清理、batch verify 副作用、cleanup_expired 并发 panic、防重放持久化、admin token 长度短路、update_site_fields 原子性 | 参考 [CODE_REVIEW_2026-05-12.md](CODE_REVIEW_2026-05-12.md) |
+
+### 2. ⚠️ 必读：旧 `/admin/api/*` URL 全部失效
+
+升级到 v1.6 后，**所有不含 suffix 段的 admin URL 都会返回 404**：
+- 收藏夹 / 脚本 / curl / Postman / 监控告警里写死的 `/admin/api/sites` 之类的 URL 立即报 404
+- 第三方监控系统的健康检查端点（如果指向 `/admin/api/stats`）需要改成新路径，或者改用 `/healthz`（这条始终是无 suffix 的）
+
+### 3. 升级步骤
+
+```bash
+# 1) 拉新版二进制 / 镜像，启动服务
+./captcha-server --config captcha.toml
+# 或：docker compose pull && docker compose up -d
+
+# 2) 看启动日志，找类似这样的一行（首次启动）：
+#   INFO captcha_server: 首次启动：已生成新的 admin path suffix 并写入 DB new_suffix=Aa1_-bcde234567
+#   INFO captcha_server: 管理后台路径：/admin/Aa1_-bcde234567/api/...
+#
+#    后续启动只会输出"管理后台路径"那行，不会重复生成；可随时回查日志或在面板「安全」页查询。
+
+# 3) 把 suffix 抄给管理员
+#    - 通知所有运维 / 监控 / 业务后端管理员
+#    - 浏览器登录 /admin/ 时输入 "Admin 访问路径" + "Admin Token"
+#    - 写监控脚本的 curl 路径同步替换
+
+# 4) 视需要在管理面板「安全」页 rotate 一次
+#    服务端会生成新的 16 字符 suffix，旧 URL 立即 404
+#    适用场景：日志泄漏、人员变更、定期轮换
+```
+
+### 4. 自定义 suffix（可选）
+
+```bash
+# 通过管理面板：安全 → Admin 访问路径 → 自定义 → 输入 8-32 位 URL-safe 字符 → 确认
+
+# 通过 API：
+curl -X PUT https://captcha.example.com/admin/<current-suffix>/api/admin-path \
+  -H "authorization: Bearer $CAPTCHA_ADMIN_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"suffix":"corp-internal-2026"}'
+# → {"ok":true,"suffix":"corp-internal-2026","note":"..."}
+```
+
+字符集：`[A-Za-z0-9_-]`，长度 `[8, 32]`。服务端会做权威校验，前端只做提前反馈。
+
+### 5. 重置 suffix（紧急场景）
+
+如果 suffix 在没人记下来的情况下意外丢失（DB 异常 / 备份恢复失败），可直接操作 SQLite：
+
+```bash
+# 方法 A：删除 server_secrets 里的 admin_path_suffix 行，重启时会自动重新生成
+sqlite3 /var/lib/captcha/captcha.db \
+  "DELETE FROM server_secrets WHERE key = 'admin_path_suffix';"
+systemctl restart captcha-server
+
+# 方法 B：直接 UPSERT 一个已知的 suffix
+sqlite3 /var/lib/captcha/captcha.db \
+  "INSERT OR REPLACE INTO server_secrets(key,value,created_at) VALUES \
+   ('admin_path_suffix', 'mySafeSuffix2026', strftime('%s','now')*1000);"
+# 不重启也能生效：下次 reload_config（修改 captcha.toml 或 30s 自动周期）就会从 DB 拉新值
+```
+
+### 6. 兼容性
+
+- `/api/v1/*`（challenge / verify / verify/batch / siteverify）**完全不受影响**：浏览器 SDK、业务后端 `/siteverify` 调用都不变
+- nginx / 反向代理：如果之前对 `/admin/api/` 写了精确 location，需改成 `/admin/`（保留 suffix 段透传）
+- 健康检查 / metrics：`/healthz` 和 `/metrics` 都没有 suffix，**继续按原路径**
+- v1.5 的所有特性（双 key 轮换、审计、site_secret HMAC、admin ban、webhook）原样保留
+
+### 7. 修复带来的可观察行为变化
+
+- **`POST /api/v1/verify/batch`** 失败 item 的 `error` 字段：之前是 `"Unauthorized(\"签名验证失败\")"`（Debug 格式），现在是 `"签名验证失败"`（Display 格式）。消费方应只读取人类可读消息。
+- 批量路径每个 item 现在**单独**计入风控滑动窗口和请求日志；之前批量 100 条失败 item 只算 0 次风控事件，现在算 100 次。如果之前的告警基于 `captcha_verify_fail_total` 阈值，可能需要重新校准。
+- IP 限流器在 50K+ IP 时的清理策略改了：按 `last_access > 5min` 时间戳淘汰，不再消耗令牌；正常用户不会被误清理。
 
 ---
 
@@ -227,7 +315,7 @@ systemctl start captcha-server
 #### 蓝绿发布（零停机）
 
 1. 新版本部署到备用节点 A'
-2. LB 切 10% 流量到 A'，观察管理面板 `/admin/api/logs` 无失败率异常
+2. LB 切 10% 流量到 A'，观察管理面板 `/admin/{suffix}/api/logs`（v1.6+；v1.5 仍是 `/admin/api/logs`）无失败率异常
 3. 逐步切到 100%
 4. 等待 `token_ttl_secs`（默认 300s）让旧 token 过期
 5. 下线旧节点
@@ -237,10 +325,11 @@ systemctl start captcha-server
 升级后可随时通过管理面板调整参数，**无需重启**。
 
 - 管理面板「站点管理」页，每个站点新增两列 `m_cost / t_cost`，点击「编辑」直接改；
-- 或 `PUT /admin/api/sites/<key>` 携带 `argon2_m_cost` / `argon2_t_cost`：
+- 或 `PUT /admin/{suffix}/api/sites/<key>` 携带 `argon2_m_cost` / `argon2_t_cost`（v1.6+ 路径含 suffix；v1.5 用 `/admin/api/sites/<key>`）：
 
   ```bash
-  curl -X PUT https://captcha.example.com/admin/api/sites/pk_abc \
+  # v1.6+
+  curl -X PUT https://captcha.example.com/admin/${ADMIN_PATH}/api/sites/pk_abc \
     -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"argon2_m_cost": 32768, "argon2_t_cost": 3}'
@@ -248,6 +337,7 @@ systemctl start captcha-server
 
 - 改动立即生效，新发出的 challenge 使用新参数；旧 challenge（签名覆盖原参数）继续按发放时的参数验证，互不影响。
 - 管理面板输入框超出 `[8, 65536]` 或 `[1, 10]` 范围会被服务端 `validate_argon2_params` 拒绝并返回 `400`。
+- v1.6+ 起：多字段更新打包在单个 SQLite 事务里，中途崩溃不会留下半更新状态。
 
 ### 5. 回滚到 v1.2.x
 

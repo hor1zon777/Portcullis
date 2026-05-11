@@ -1,5 +1,58 @@
 # Changelog
 
+## [1.6.0] — 2026-05-12 — Admin URL 后缀 + CRITICAL/HIGH 修复
+
+**目标**：把管理端入口"藏"到一个随机 URL 段后，让扫描器、机器人、引用了旧地址的脚本一律 404；同时修复一次代码审查暴露的限流器逻辑反转、批量接口绕过风控等高危问题。
+
+### 新增
+
+- **Admin 路径随机后缀**（默认强制启用）：所有 admin API 从 `/admin/api/*` 改为 `/admin/{suffix}/api/*`，错误 suffix **一律 404**，不暴露 admin 入口存在。
+  - 启动期 `ensure_admin_path_suffix`：DB 没有时随机生成 16 字符 URL-safe 串（`[A-Za-z0-9_-]`）并落盘 + 日志输出；首次升级到 v1.6 的实例从日志拿到 URL。
+  - `admin/path_check.rs` 新 middleware：从 URL 提 suffix → SHA-256 → 32 字节定长 `ct_eq`，消除按长度/前缀短路的侧信道。
+  - **layer 顺序 path_check → auth**：错误 suffix **不会**进入 admin 失败计数器，攻击者用"猜 suffix"无法耗尽真实 admin 的失败配额。
+  - 3 个新 endpoint：
+    - `GET /admin/{suffix}/api/admin-path` 查看当前 suffix + 长度/字符集约束
+    - `PUT /admin/{suffix}/api/admin-path` body `{suffix: "..."}` 自定义（服务端校验 `^[A-Za-z0-9_-]{8,32}$`）
+    - `POST /admin/{suffix}/api/admin-path/rotate` 重新随机生成
+  - rotate / update **立即生效**，旧 URL 立刻 404，前端 mutation 成功后自动同步本地 `localStorage.captcha_admin_path`。
+  - 审计：`admin_path.update` / `admin_path.rotate` 两条新 action；`target` 字段是 `sha256(suffix)[..4]` hex 脱敏前缀，DB 泄漏不暴露明文 URL。
+  - 管理面板「安全」页新增 `AdminPathCard`：复制 / 重新生成 / 自定义 + 二次确认。
+  - 登录页新增 "Admin 访问路径" 输入框（默认值来自 localStorage 缓存），与 token 一起 probe。
+
+- **`db::load_server_secret_string` / `save_server_secret_string`**：复用 `server_secrets` 表存变长 UTF-8 字符串（admin path suffix 用），与已有的 `_32` 版本并列。
+
+### 修复
+
+参考 [docs/CODE_REVIEW_2026-05-12.md](docs/CODE_REVIEW_2026-05-12.md)。
+
+**CRITICAL**
+
+- **C-1 `IpRateLimiter` 清理逻辑反转**：容量超过 50K 时 `retain(|_, l| l.check().is_err())` 既消耗令牌又反向 retain —— 正常用户的桶被淘汰、被限流的恶意 IP 的桶反而保留。改为 `LimiterEntry { limiter, last_access_ms }`，按 `IDLE_THRESHOLD_MS=5min` 时间戳淘汰，**无副作用查询**。
+- **C-2 `/api/v1/verify/batch` 副作用缺失**：批量路径只 record metrics，**绕过**请求日志、风控滑动窗口、IP 统计；错误用 `{e:?}` Debug 格式回显内部 enum variant。抽出 `record_verify_side_effects` 让单条与批量走同一副作用；为 `AppError` 实现 `Display`，错误改用 `{e}`。
+
+**HIGH**
+
+- **H-1 `MemoryStore::cleanup_expired` 下溢 panic**：并发插入下 `before - len()` 在 `usize` 上下溢。改为 `retain` 回调内累加计数。
+- **H-2 / H-3 防重放持久化时序窗口**：`mark_nonce_used` 之前是 fire-and-forget `spawn_blocking`，进程在内存 mark 之后、DB 写入之前崩溃时同一 challenge 可被重放一次。改为 `await` + 错误显式映射：`Ok(true)` → 通过；`Ok(false)` → Conflict（DB 真相）；`Err(_)` → Internal。
+- **H-4 `reload_config` 顺序**：原先 `store config` 在前，handler 路径会观察到"新 config + 旧 risk"。改为**先**拿 risk write 锁更新、**再** publish 新 config，残余窗口压缩到良性方向。
+- **H-5 admin token 长度泄露**：`if t.len() == expected.len() { ct_eq } else { false }` 按长度短路。改为 `sha256(input)` 压成 32 字节定长后 `ct_eq`。
+- **H-6 `update_site_fields` 非原子**：每字段一条独立 UPDATE，中途崩溃留下半更新状态。改用 `rusqlite::Transaction` 单事务，任一 UPDATE 失败整体回滚。
+
+### 行为变更（breaking）
+
+- **`/admin/api/*` 旧 URL 全部 404**：升级到 v1.6 后必须用 `/admin/{suffix}/api/*`，suffix 在首次启动日志中输出。
+- `verify_batch` 错误字段：`error: "Unauthorized(\"...\")"` → `error: "..."`（消费方应只读取人类可读消息，不要解析 enum variant）。
+- 审计表新增两个 action 字符串 `admin_path.update` / `admin_path.rotate`，旧消费方应忽略未知 action。
+
+### 测试
+
+- 总计：51 lib + 54 integration + 32 core = 137 测试通过
+- 新增针对 fix 的 lib/integration 回归测试 7 条（rate_limit 清理、batch verify 日志/格式、cleanup_expired 并发 panic、token 长度短路）
+- 新增 admin path 专项 integration 测试 6 条：错误 suffix 404、GET 返回字段、PUT 旧 URL 失效、非法 suffix 拒绝、rotate、**错误 suffix 不消耗 admin 失败配额**
+- 新增 config 单测 4 条：`validate_admin_path_suffix` / `gen_admin_path_suffix` 随机性
+
+---
+
 ## [1.5.0] — 2026-04-24 — 服务端密钥与审计硬化
 
 **目标**：把 DB 泄漏从「等于所有站点 secret_key 泄漏」降为「只泄漏不可逆 HMAC」，并为管理员操作提供完整可查的审计轨迹。同时引入 `CAPTCHA_SECRET` 双 key 轮换与登录失败自动 ban，补齐运维安全闭环。

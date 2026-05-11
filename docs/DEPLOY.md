@@ -496,9 +496,11 @@ Docker Compose 编排 3 个服务：
 | `nginx` | 网关，统一入口 | **80（对外）** |
 
 路由规则：
-- `/admin/api/*` → captcha-server（管理 API）
-- `/admin/*` → admin-ui（React SPA）
-- `/*` → captcha-server（公共 API + SDK + metrics）
+- `/admin/{suffix}/api/*` → captcha-server（管理 API，v1.6+ 含随机 suffix；suffix 是 nginx **透传**给后端的普通路径段，不需要在 nginx 配置里硬编码）
+- `/admin/*` → admin-ui（React SPA，静态资源；JS 内会拼出含 suffix 的 API URL 调用上一条规则）
+- `/*` → captcha-server（公共 API + SDK + metrics + healthz）
+
+> 注意：v1.5 及之前的 `/admin/api/*` location 精确匹配在 v1.6 起会 404 后端。如果你写过精确 location，改成更通用的 `/admin/` 即可（默认 nginx 配置已经这样写）。
 
 ### 6.2 使用 docker-compose（推荐）
 

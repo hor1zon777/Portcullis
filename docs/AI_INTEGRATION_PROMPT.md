@@ -22,11 +22,11 @@ Portcullis 是一个自托管的验证码服务，用工作量证明（Proof of 
 **Docker 部署架构（3 个容器 + 1 个对外端口）：**
 
 ```
-Nginx(:NGINX_PORT) → /admin/*       → admin-ui 容器（React 管理面板）
-                   → /admin/api/*   → captcha-server 容器（管理 API）
-                   → /api/v1/*      → captcha-server 容器（公共 API）
-                   → /sdk/*         → captcha-server 容器（SDK + WASM）
-                   → /metrics       → captcha-server 容器（Prometheus）
+Nginx(:NGINX_PORT) → /admin/*               → admin-ui 容器（React 管理面板，静态资源）
+                   → /admin/{suffix}/api/*  → captcha-server 容器（管理 API，v1.6+ 路径含随机 suffix）
+                   → /api/v1/*              → captcha-server 容器（公共 API）
+                   → /sdk/*                 → captcha-server 容器（SDK + WASM）
+                   → /metrics               → captcha-server 容器（Prometheus）
 ```
 
 ---
@@ -229,7 +229,7 @@ curl -X POST https://你的验证服务地址/api/v1/siteverify \
 | `/sdk/pow-captcha.js` | GET | 浏览器 SDK 脚本 | 前端页面 |
 | `/sdk/captcha_wasm_bg.wasm` | GET | WASM 求解器 | SDK 自动加载 |
 | `/admin/` | GET | React 管理面板 | 管理员浏览器 |
-| `/admin/api/*` | * | 管理 API（需 Bearer Token） | 管理面板 |
+| `/admin/{suffix}/api/*` | * | 管理 API（需 Bearer Token + 正确 suffix；v1.6+） | 管理面板 |
 | `/metrics` | GET | Prometheus 指标 | 监控系统 |
 | `/healthz` | GET | 健康检查 | 运维 / LB |
 

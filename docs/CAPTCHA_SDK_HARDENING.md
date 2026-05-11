@@ -18,7 +18,7 @@
 | Ed25519 签名 manifest | ✅ 已实施 | Tier 2 | 可选 opt-in，未配置密钥时向后兼容 |
 | `X-Portcullis-Signature` 响应头 | ✅ 已实施 | Tier 2 | base64(Ed25519 sig of response body bytes) |
 | `gen-manifest-key` CLI 子命令 | ✅ 已实施 | Tier 2 | 输出 seed + 公钥供带外配置 |
-| `GET /admin/api/manifest-pubkey` | ✅ 已实施 | Tier 2 | 管理面板导出当前公钥 |
+| `GET /admin/{suffix}/api/manifest-pubkey` | ✅ 已实施 | Tier 2 | 管理面板导出当前公钥（v1.6+ 路径含 suffix） |
 | 双密钥轮换 | ⏸ 未实施 | Tier 3? | 目前通过两步部署完成切换；如频次高再设计 |
 | Trusted Types / Permissions-Policy（方案 B/C） | ⏸ 主站侧 | — | 属主站架构层改造，非 Portcullis 范围 |
 
