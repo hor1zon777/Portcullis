@@ -2,6 +2,7 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::state::AppState;
@@ -9,6 +10,17 @@ use crate::state::AppState;
 #[derive(serde::Deserialize)]
 pub struct TokenQuery {
     pub token: Option<String>,
+}
+
+/// 把任意长度的输入压成固定 32 字节，让后续 `ct_eq` 始终在等长缓冲上跑，
+/// 不再因为长度短路泄露 admin token 的真实长度（H-5）。
+fn fingerprint(input: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    let digest = hasher.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
 }
 
 /// v1.5.0：携带 `AppState` 的认证 middleware。期望 token 从 `state.config.admin_token` 读取。
@@ -41,10 +53,12 @@ pub async fn auth_middleware_with_state(
             .map(|s| s.to_string())
     });
 
-    let matches = match &provided {
-        Some(t) if t.len() == expected.len() => t.as_bytes().ct_eq(expected.as_bytes()).into(),
-        _ => false,
-    };
+    // 始终做一次 sha256 -> ct_eq 的等时比较，避免历史实现里
+    // 「长度不等直接 return false」泄露 admin token 真实长度的侧信道。
+    let expected_fp = fingerprint(expected.as_bytes());
+    let provided_fp = fingerprint(provided.as_deref().unwrap_or("").as_bytes());
+    let fp_match: bool = expected_fp.ct_eq(&provided_fp).into();
+    let matches = provided.is_some() && fp_match;
 
     if matches {
         // v1.5.0 成功登录不写 audit（太频繁），但 ban 计数器清零

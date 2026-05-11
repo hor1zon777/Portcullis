@@ -3,6 +3,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,10 +20,26 @@ use governor::{
 
 type IpLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
+/// 单个 IP 的桶 + 最后访问时间。
+/// 清理时按 `last_access_ms` 淘汰长时间未活动的桶，
+/// 避免历史实现里通过 `check()` 副作用判断"是否空闲"——那种实现
+/// 会把正常用户的桶误判为可回收并消耗一个 token，反而保留正在被限流的恶意 IP。
+struct LimiterEntry {
+    limiter: Arc<IpLimiter>,
+    last_access_ms: AtomicU64,
+}
+
+/// 桶被认为"空闲"的阈值（最后访问超过此时间即可回收）。
+const IDLE_THRESHOLD_MS: u64 = 5 * 60 * 1000; // 5 分钟
+/// 触发容量保护清理的阈值。
+const CAPACITY_LIMIT: usize = 50_000;
+/// 容量清理后保留的目标条目数（超过 idle 阈值仍超容量时，强制裁剪到此值）。
+const CAPACITY_TARGET: usize = 25_000;
+
 /// 每 IP 一个独立令牌桶。
 #[derive(Clone)]
 pub struct IpRateLimiter {
-    limiters: Arc<DashMap<IpAddr, Arc<IpLimiter>>>,
+    limiters: Arc<DashMap<IpAddr, Arc<LimiterEntry>>>,
     quota: Quota,
 }
 
@@ -37,18 +54,48 @@ impl IpRateLimiter {
     }
 
     fn check(&self, ip: IpAddr) -> bool {
-        // 容量保护：超过 50K IP 时清理（令牌桶满的条目可安全移除）
-        if self.limiters.len() > 50_000 {
-            let before = self.limiters.len();
-            self.limiters.retain(|_, limiter| limiter.check().is_err());
-            tracing::debug!("限流器清理：{} → {}", before, self.limiters.len());
+        // 容量保护：超过 CAPACITY_LIMIT 时按 last_access 淘汰空闲桶
+        if self.limiters.len() > CAPACITY_LIMIT {
+            self.evict_idle();
         }
-        let limiter = self
+
+        let now = now_ms();
+        let entry = self
             .limiters
             .entry(ip)
-            .or_insert_with(|| Arc::new(RateLimiter::direct(self.quota)))
+            .or_insert_with(|| {
+                Arc::new(LimiterEntry {
+                    limiter: Arc::new(RateLimiter::direct(self.quota)),
+                    last_access_ms: AtomicU64::new(now),
+                })
+            })
             .clone();
-        limiter.check().is_ok()
+        entry.last_access_ms.store(now, Ordering::Relaxed);
+        entry.limiter.check().is_ok()
+    }
+
+    /// 容量清理：先按 `IDLE_THRESHOLD_MS` 淘汰空闲桶；若仍超容量再按"最旧优先"裁剪到 CAPACITY_TARGET。
+    /// 整个过程**不会**调用 `limiter.check()`，因此不会消耗任何 IP 的令牌。
+    fn evict_idle(&self) {
+        let before = self.limiters.len();
+        let cutoff = now_ms().saturating_sub(IDLE_THRESHOLD_MS);
+        self.limiters
+            .retain(|_, entry| entry.last_access_ms.load(Ordering::Relaxed) > cutoff);
+
+        // 如果清理后仍超容量（大量活跃 IP），按最旧 last_access 裁剪
+        if self.limiters.len() > CAPACITY_LIMIT {
+            let mut snapshots: Vec<(IpAddr, u64)> = self
+                .limiters
+                .iter()
+                .map(|e| (*e.key(), e.value().last_access_ms.load(Ordering::Relaxed)))
+                .collect();
+            snapshots.sort_unstable_by_key(|&(_, ts)| ts);
+            let drop_count = snapshots.len().saturating_sub(CAPACITY_TARGET);
+            for (ip, _) in snapshots.into_iter().take(drop_count) {
+                self.limiters.remove(&ip);
+            }
+        }
+        tracing::debug!("限流器清理：{} → {}", before, self.limiters.len());
     }
 }
 
@@ -195,4 +242,50 @@ impl AdminLoginLimiter {
 /// 与业务 IpRateLimiter 独立，阈值更严格。
 pub fn admin_rate_limiter() -> IpRateLimiter {
     IpRateLimiter::new(1, 5)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归 C-1：容量清理后正常用户的桶不会被白白扣令牌。
+    /// 历史实现里 `retain(|_, l| l.check().is_err())` 会消耗每个未被限流桶的一个 token，
+    /// 配合"反向 retain"导致正常用户的桶被删除、恶意 IP 的桶反而被保留。
+    #[test]
+    fn capacity_cleanup_does_not_consume_tokens() {
+        let limiter = IpRateLimiter::new(2, 2); // 2 req/s, burst 2
+
+        // 触发清理需要 > 50K 条目；这里只验证清理函数的语义不消耗令牌：
+        // 直接构造一个 ip 让其计入，然后手动调用 evict_idle 即可。
+        let ip: IpAddr = "203.0.113.1".parse().unwrap();
+        assert!(limiter.check(ip));
+        // 重复触发 evict_idle 不应消耗 token —— 即下一次 check 仍应通过。
+        for _ in 0..5 {
+            limiter.evict_idle();
+        }
+        // 桶应仍保留剩余令牌：burst=2，第一次 check 用掉 1，剩 1
+        assert!(
+            limiter.check(ip),
+            "清理逻辑不应消耗令牌；正常用户的桶应仍有剩余 token"
+        );
+    }
+
+    /// 回归 C-1：长时间未活动的桶应该被清理掉。
+    #[test]
+    fn idle_buckets_are_evicted() {
+        let limiter = IpRateLimiter::new(1, 1);
+        let ip: IpAddr = "198.51.100.7".parse().unwrap();
+        assert!(limiter.check(ip));
+        assert_eq!(limiter.limiters.len(), 1);
+
+        // 手动把 last_access 调到很久以前，模拟 IDLE_THRESHOLD_MS + 1
+        if let Some(entry) = limiter.limiters.get(&ip) {
+            entry.last_access_ms.store(
+                now_ms().saturating_sub(IDLE_THRESHOLD_MS + 1000),
+                Ordering::Relaxed,
+            );
+        }
+        limiter.evict_idle();
+        assert_eq!(limiter.limiters.len(), 0, "空闲超过阈值的桶应被回收");
+    }
 }

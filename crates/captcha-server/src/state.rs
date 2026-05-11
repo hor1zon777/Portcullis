@@ -46,8 +46,19 @@ impl AppState {
         merged.manifest_signing_key =
             crate::db::load_server_secret_32(&self.db, "manifest_signing_key")
                 .or(merged.manifest_signing_key);
+
+        // 先拿到 risk 的 write 锁更新 CIDR / 滑动窗口阈值，再 publish 新 config。
+        // 顺序说明：handler 路径是「先 load config，再 read risk」——若反过来先 store config
+        // 再 update risk，handler 可能拿到「新 config + 旧 risk」的组合，新加的黑名单看似没生效。
+        // 现在 risk 先就绪，新 config publish 后任何后续读到的 risk 至少已是新配置；
+        // 唯一残余窗口是「reload 进入前的 handler 还持有旧 config」——这种 in-flight 请求
+        // 用旧 config + 等待 risk 锁后的新 risk，影响仅限于"新黑名单可能晚一个请求生效"，
+        // 不会导致已封禁 IP 被放行。
+        let mut risk_guard = self.risk.write().await;
+        risk_guard.update_config(risk_cfg);
         self.config.store(Arc::new(merged));
-        self.risk.write().await.update_config(risk_cfg);
+        drop(risk_guard);
+
         tracing::info!("配置已热重载");
     }
 }

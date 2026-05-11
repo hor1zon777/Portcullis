@@ -321,78 +321,96 @@ pub fn update_site_fields(
     bind_token_to_ip: Option<bool>,
     bind_token_to_ua: Option<bool>,
 ) {
-    let conn = lock(db);
+    let mut conn = lock(db);
     let now = now_ms();
+    // 历史实现里每个字段一条独立 UPDATE，缺少事务保护：中途崩溃会留下半更新状态，
+    // 且 `updated_at` 被多次重写。现在统一打包到一个事务中，任意 UPDATE 失败整体回滚。
+    let tx = match conn.transaction() {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("DB 事务开启失败: {e}");
+            return;
+        }
+    };
+
+    let mut all_ok = true;
+    // 闭包内只对 (param0,) 用 params!，因为不同字段类型不同，无法走统一签名。
+    // 改为内联宏 + 标志位写法以保证事务一致性。
+    macro_rules! run_update {
+        ($sql:literal, $($p:expr),+ $(,)?) => {
+            if all_ok {
+                if let Err(e) = tx.execute($sql, rusqlite::params![$($p),+]) {
+                    tracing::warn!("DB 写入失败: {e}");
+                    all_ok = false;
+                }
+            }
+        };
+    }
+
     if let Some(d) = diff {
-        conn.execute(
+        run_update!(
             "UPDATE sites SET diff = ?1, updated_at = ?2 WHERE key = ?3",
-            params![d, now, key],
-        )
-        .unwrap_or_else(|e| {
-            tracing::warn!("DB 写入失败: {e}");
-            0
-        });
+            d,
+            now,
+            key
+        );
     }
     if let Some(o) = origins {
         let json = serde_json::to_string(o).unwrap_or_else(|_| "[]".into());
-        conn.execute(
+        run_update!(
             "UPDATE sites SET origins = ?1, updated_at = ?2 WHERE key = ?3",
-            params![json, now, key],
-        )
-        .unwrap_or_else(|e| {
-            tracing::warn!("DB 写入失败: {e}");
-            0
-        });
+            json,
+            now,
+            key
+        );
     }
     if let Some(m) = argon2_m_cost {
-        conn.execute(
+        run_update!(
             "UPDATE sites SET argon2_m_cost = ?1, updated_at = ?2 WHERE key = ?3",
-            params![m, now, key],
-        )
-        .unwrap_or_else(|e| {
-            tracing::warn!("DB 写入失败: {e}");
-            0
-        });
+            m,
+            now,
+            key
+        );
     }
     if let Some(t) = argon2_t_cost {
-        conn.execute(
+        run_update!(
             "UPDATE sites SET argon2_t_cost = ?1, updated_at = ?2 WHERE key = ?3",
-            params![t, now, key],
-        )
-        .unwrap_or_else(|e| {
-            tracing::warn!("DB 写入失败: {e}");
-            0
-        });
+            t,
+            now,
+            key
+        );
     }
     if let Some(p) = argon2_p_cost {
-        conn.execute(
+        run_update!(
             "UPDATE sites SET argon2_p_cost = ?1, updated_at = ?2 WHERE key = ?3",
-            params![p, now, key],
-        )
-        .unwrap_or_else(|e| {
-            tracing::warn!("DB 写入失败: {e}");
-            0
-        });
+            p,
+            now,
+            key
+        );
     }
     if let Some(b) = bind_token_to_ip {
-        conn.execute(
+        run_update!(
             "UPDATE sites SET bind_token_to_ip = ?1, updated_at = ?2 WHERE key = ?3",
-            params![b as i32, now, key],
-        )
-        .unwrap_or_else(|e| {
-            tracing::warn!("DB 写入失败: {e}");
-            0
-        });
+            b as i32,
+            now,
+            key
+        );
     }
     if let Some(b) = bind_token_to_ua {
-        conn.execute(
+        run_update!(
             "UPDATE sites SET bind_token_to_ua = ?1, updated_at = ?2 WHERE key = ?3",
-            params![b as i32, now, key],
-        )
-        .unwrap_or_else(|e| {
-            tracing::warn!("DB 写入失败: {e}");
-            0
-        });
+            b as i32,
+            now,
+            key
+        );
+    }
+
+    if all_ok {
+        if let Err(e) = tx.commit() {
+            tracing::warn!("DB 事务提交失败: {e}");
+        }
+    } else if let Err(e) = tx.rollback() {
+        tracing::warn!("DB 事务回滚失败: {e}");
     }
 }
 

@@ -25,6 +25,42 @@ pub struct VerifyResponse {
     pub exp: u64,
 }
 
+/// 单条 verify 的副作用（请求日志 + 风控统计 + Prometheus 指标）。
+/// `verify` 和 `verify_batch` 通过这一个 helper 写日志，避免批量路径绕过审计。
+async fn record_verify_side_effects(
+    state: &AppState,
+    site_key: &str,
+    nonce: u64,
+    client_ip: Option<std::net::IpAddr>,
+    started: std::time::Instant,
+    success: bool,
+    error_msg: Option<&str>,
+) {
+    let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
+    crate::metrics::record_verify(site_key, success, started);
+
+    let log_entry = crate::admin::request_log::LogEntry {
+        timestamp: crate::admin::request_log::now_ms(),
+        ip: client_ip,
+        site_key: site_key.to_string(),
+        nonce,
+        success,
+        duration_ms,
+        error: if success {
+            None
+        } else {
+            Some(error_msg.unwrap_or("verify failed").to_string())
+        },
+    };
+    state.request_log.inc();
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || crate::db::insert_log(&db, &log_entry));
+
+    if let Some(ip) = client_ip {
+        state.risk.read().await.record_verify(ip, success);
+    }
+}
+
 /// POST /api/v1/verify
 pub async fn verify(
     State(state): State<AppState>,
@@ -38,32 +74,20 @@ pub async fn verify(
 
     let result = do_verify(&state, &headers, req).await;
 
-    let success = result.is_ok();
-    let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
-    crate::metrics::record_verify(&site_key, success, started);
-
-    // 写入请求日志（内存 + DB）
-    let log_entry = crate::admin::request_log::LogEntry {
-        timestamp: crate::admin::request_log::now_ms(),
-        ip: client_ip,
-        site_key: site_key.clone(),
-        nonce,
-        success,
-        duration_ms,
-        error: if success {
-            None
-        } else {
-            Some("verify failed".to_string())
-        },
+    let (success, error_msg) = match &result {
+        Ok(_) => (true, None),
+        Err(e) => (false, Some(format!("{e}"))),
     };
-    state.request_log.inc();
-    let db = state.db.clone();
-    tokio::task::spawn_blocking(move || crate::db::insert_log(&db, &log_entry));
-
-    // 记录风控数据
-    if let Some(ip) = client_ip {
-        state.risk.read().await.record_verify(ip, success);
-    }
+    record_verify_side_effects(
+        &state,
+        &site_key,
+        nonce,
+        client_ip,
+        started,
+        success,
+        error_msg.as_deref(),
+    )
+    .await;
 
     result
 }
@@ -99,20 +123,35 @@ async fn do_verify(
         return Err(AppError::BadRequest("挑战已过期".to_string()));
     }
 
+    // 防重放：先内存（快速拒绝重复请求）
     if !state
         .store
         .mark_challenge_used(&req.challenge.id, req.challenge.exp)
     {
         return Err(AppError::Conflict("挑战已被使用".to_string()));
     }
-    // 同步写入 DB 防重放（重启后仍有效）
+    // 同步等待 DB 持久化完成。DB 是最终真相，重启后仍能防重放。
+    // 内存先 mark 是为了在 DB 写入期间也能拒绝并发重放。
     {
         let db = state.db.clone();
         let id = req.challenge.id.clone();
         let exp = req.challenge.exp;
-        tokio::task::spawn_blocking(move || {
-            crate::db::mark_nonce_used(&db, &id, "challenge", exp);
-        });
+        let join_result = tokio::task::spawn_blocking(move || {
+            crate::db::mark_nonce_used(&db, &id, "challenge", exp)
+        })
+        .await;
+        match join_result {
+            Ok(true) => {}
+            Ok(false) => {
+                // 内存说没用过、DB 说用过 —— 表明上次进程崩在内存 mark 后、DB 写入前，
+                // 本次重启加载未恢复内存；按 DB 真相拒绝。
+                return Err(AppError::Conflict("挑战已被使用".to_string()));
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "防重放 DB 写入失败（spawn_blocking join error）");
+                return Err(AppError::Internal("防重放持久化失败".to_string()));
+            }
+        }
     }
 
     if !pow::verify_solution(&req.challenge, req.nonce) {
@@ -203,28 +242,44 @@ pub async fn verify_batch(
         return Err(AppError::BadRequest("batch 最多 20 条".to_string()));
     }
 
+    let client_ip = extract_ip(&headers, None);
     let mut results = Vec::with_capacity(req.items.len());
     for item in req.items {
-        let site_key = item.challenge.site_key.clone();
         let started = std::time::Instant::now();
+        let site_key = item.challenge.site_key.clone();
+        let nonce = item.nonce;
 
-        match do_verify(&state, &headers, item).await {
-            Ok(Json(v)) => {
-                crate::metrics::record_verify(&site_key, true, started);
-                results.push(BatchVerifyItem {
-                    success: true,
-                    captcha_token: Some(v.captcha_token),
-                    error: None,
-                });
-            }
-            Err(e) => {
-                crate::metrics::record_verify(&site_key, false, started);
-                results.push(BatchVerifyItem {
-                    success: false,
-                    captcha_token: None,
-                    error: Some(format!("{e:?}")),
-                });
-            }
+        let outcome = do_verify(&state, &headers, item).await;
+        let (success, error_msg) = match &outcome {
+            Ok(_) => (true, None),
+            Err(e) => (false, Some(format!("{e}"))),
+        };
+
+        // 关键：和单条 verify 走相同的副作用（日志 / 风控 / Prometheus）。
+        // 历史实现仅 record metrics，导致 batch 路径可绕过风控滑动窗口。
+        record_verify_side_effects(
+            &state,
+            &site_key,
+            nonce,
+            client_ip,
+            started,
+            success,
+            error_msg.as_deref(),
+        )
+        .await;
+
+        match outcome {
+            Ok(Json(v)) => results.push(BatchVerifyItem {
+                success: true,
+                captcha_token: Some(v.captcha_token),
+                error: None,
+            }),
+            Err(e) => results.push(BatchVerifyItem {
+                success: false,
+                captcha_token: None,
+                // 使用 Display 而非 Debug，避免回显内部错误细节
+                error: Some(format!("{e}")),
+            }),
         }
     }
 

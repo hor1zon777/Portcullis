@@ -112,13 +112,26 @@ pub async fn site_verify(
     {
         return Ok(fail("token 已被核验过（单次使用）"));
     }
+    // 同步等待 DB 持久化完成，防止进程重启后内存丢失记录导致同一 token 被二次核验。
     {
         let db = state.db.clone();
         let cid = verified.challenge_id.clone();
         let exp = verified.exp;
-        tokio::task::spawn_blocking(move || {
-            crate::db::mark_nonce_used(&db, &cid, "token", exp);
-        });
+        let join_result = tokio::task::spawn_blocking(move || {
+            crate::db::mark_nonce_used(&db, &cid, "token", exp)
+        })
+        .await;
+        match join_result {
+            Ok(true) => {}
+            Ok(false) => {
+                // 内存认为首次但 DB 已存在 → 上次崩在 mark 之间；按 DB 真相拒绝。
+                return Ok(fail("token 已被核验过（单次使用）"));
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "siteverify 防重放 DB 写入失败");
+                return Ok(fail("token 校验暂时不可用，请稍后重试"));
+            }
+        }
     }
 
     crate::metrics::record_siteverify(true);

@@ -47,11 +47,26 @@ impl MemoryStore {
 
     pub fn cleanup_expired(&self) -> usize {
         let now = now_ms();
-        let before_c = self.challenges_used.len();
-        self.challenges_used.retain(|_, exp| *exp > now);
-        let before_t = self.tokens_used.len();
-        self.tokens_used.retain(|_, exp| *exp > now);
-        (before_c - self.challenges_used.len()) + (before_t - self.tokens_used.len())
+        // 用 retain 回调内累加，避免历史实现 `before - after` 在并发插入下
+        // 因 DashMap 非快照语义导致的 usize 下溢 panic。
+        let mut removed = 0usize;
+        self.challenges_used.retain(|_, exp| {
+            if *exp > now {
+                true
+            } else {
+                removed += 1;
+                false
+            }
+        });
+        self.tokens_used.retain(|_, exp| {
+            if *exp > now {
+                true
+            } else {
+                removed += 1;
+                false
+            }
+        });
+        removed
     }
 
     pub fn len(&self) -> usize {
